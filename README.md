@@ -23,11 +23,11 @@ This initial version does **not** store the actual content of the web pages, onl
 │   ├── src/                     # Source code
 │   │   ├── __init__.py
 │   │   ├── config.py            # Handles loading and validating config.json
-│   │   ├── sitemap_fetcher.py   # (To be created) Fetches sitemaps
-│   │   ├── sitemap_parser.py    # (To be created) Parses sitemap XML
-│   │   ├── data_processor.py    # (To be created) Processes changes and updates data
-│   │   └── main.py              # (To be created) Main script orchestrating the tasks
-│   ├── data/                    # Stores Parquet data files (created by the script)
+│   │   ├── sitemap_fetcher.py   # Fetches sitemaps
+│   │   ├── sitemap_parser.py    # Parses sitemap XML
+│   │   ├── data_processor.py    # Processes changes and updates data for each domain
+│   │   └── main.py              # Main script orchestrating the tasks
+│   ├── data/                    # Stores data files (created by the script)
 │   │   └── .gitkeep
 │   ├── requirements.txt         # Python dependencies
 │   ├── config.json              # Configuration for domains to monitor
@@ -65,19 +65,22 @@ This initial version does **not** store the actual content of the web pages, onl
 
 ## Usage
 
--   **Manual Run (for testing)**: Navigate to the `competitive_content_monitoring` directory and run the main script (once `src/main.py` is implemented):
+-   **Manual Run (for testing)**: Navigate to the `competitive_content_monitoring` project root directory and run the main script:
     ```bash
     python src/main.py
     ```
--   **Automated Runs**: The system is configured to run daily via GitHub Actions. Changes to the `data/` directory (containing Parquet files) will be committed back to the repository by the action.
+    (Ensure your current working directory is the project root, `competitive_content_monitoring`, not the `src` directory, for `config.json` to be found correctly by default).
+-   **Automated Runs**: The system is configured to run daily via GitHub Actions. Changes to the `data/` directory (containing Parquet, CSV, and JSON files) will be committed back to the repository by the action.
 
 ## Data Output
 
-The script will generate/update Parquet files in the `competitive_content_monitoring/data/` directory:
--   `sitemap_urls.parquet`: Contains all unique URLs found across sitemaps, with their metadata and first/last seen timestamps.
--   `url_changes.parquet`: Logs every detected change (new, updated, removed) with relevant details and timestamps.
+The script processes each domain specified in `config.json` and generates/updates data files in the `competitive_content_monitoring/data/` directory. For each domain (e.g., `example.com`), the following files are created:
 
-These files can be analyzed using Python with libraries like Pandas.
+-   `example.com_urls.parquet`: Contains all unique URLs found for `example.com`, with their metadata (like `loc`, `lastmod`), detection timestamps, and a `change_type` column indicating if the URL is 'new', 'updated', 'removed', or 'unchanged' in the latest run. This is the primary data file for analysis.
+-   `example.com_urls.csv`: A CSV version of the Parquet file for easier ad-hoc viewing or use in tools that prefer CSV.
+-   `example.com_urls.json`: A JSON Lines version of the data, where each line is a JSON object representing a URL entry.
+
+These files store the history and current state of all discovered page URLs from the sitemaps. The `DataProcessor` module handles loading previous data, comparing it with the latest fetch, and identifying changes.
 
 ## Contributing
 

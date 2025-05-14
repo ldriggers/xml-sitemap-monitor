@@ -1,15 +1,13 @@
 {
-  "domains": [
+  "targets": [
     {
-      "name": "Bankrate",
       "domain": "bankrate.com",
-      "sitemap_url": "https://www.bankrate.com/sitemap.xml"
+      "sitemap_url": "https://www.bankrate.com/sitemap/sitemap-index.xml"
     },
     {
-      "name": "NerdWallet",
       "domain": "nerdwallet.com",
-      "sitemap_url": "https://www.nerdwallet.com/sitemap.xml"
+      "sitemap_url": "https://www.nerdwallet.com/blog/wp-sitemap.xml"
     }
   ],
-  "user_agent": "CompetitorSitemapMonitor/1.0 (+http://your-repo-url-here)"
+  "user_agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot"
 } 

@@ -32,25 +32,25 @@ def validate_config(config: Dict[str, Any]) -> bool:
         logger.error("Configuration must be a dictionary.")
         return False
 
-    if "domains" not in config or not isinstance(config["domains"], list):
-        logger.error("'domains' key is missing or not a list in config.")
+    if "targets" not in config or not isinstance(config["targets"], list):
+        logger.error("'targets' key is missing or not a list in config.")
         return False
 
-    if not config["domains"]:
-        logger.warning("'domains' list is empty. No sitemaps will be monitored.")
-        # Allow empty domains list for now, might be a valid use case for setup.
+    if not config["targets"]:
+        logger.warning("'targets' list is empty. No sitemaps will be monitored.")
+        # Allow empty targets list for now, might be a valid use case for setup.
 
-    for i, domain_entry in enumerate(config["domains"]):
-        if not isinstance(domain_entry, dict):
-            logger.error(f"Domain entry at index {i} is not a dictionary.")
+    for i, target_entry in enumerate(config["targets"]):
+        if not isinstance(target_entry, dict):
+            logger.error(f"Target entry at index {i} is not a dictionary.")
             return False
-        required_keys = ["name", "domain", "sitemap_url"]
+        required_keys = ["domain", "sitemap_url"]
         for key in required_keys:
-            if key not in domain_entry:
-                logger.error(f"Domain entry at index {i} is missing required key: '{key}'.")
+            if key not in target_entry:
+                logger.error(f"Target entry at index {i} is missing required key: '{key}'.")
                 return False
-            if not isinstance(domain_entry[key], str) or not domain_entry[key].strip():
-                logger.error(f"Value for key '{key}' in domain entry at index {i} must be a non-empty string.")
+            if not isinstance(target_entry[key], str) or not target_entry[key].strip():
+                logger.error(f"Value for key '{key}' in target entry at index {i} must be a non-empty string.")
                 return False
 
     if "user_agent" not in config or not isinstance(config["user_agent"], str) or not config["user_agent"].strip():
@@ -66,6 +66,6 @@ if __name__ == '__main__':
     config = load_config()
     if config:
         logger.info(f"Loaded user agent: {config.get('user_agent')}")
-        logger.info(f"Number of domains to monitor: {len(config.get('domains', []))}")
+        logger.info(f"Number of targets to monitor: {len(config.get('targets', []))}")
     else:
         logger.error("Failed to load or validate configuration.") 

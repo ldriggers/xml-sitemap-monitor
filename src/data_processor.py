@@ -13,15 +13,15 @@ COL_COMPETITOR_NAME = "competitor_name"
 COL_FIRST_SEEN_AT = "first_seen_at"
 COL_LAST_SEEN_AT = "last_seen_at"
 COL_LASTMOD = "lastmod"
-COL_CHANGEFREQ = "changefreq"
-COL_PRIORITY = "priority"
+# COL_CHANGEFREQ = "changefreq" # No longer used
+# COL_PRIORITY = "priority" # No longer used
 COL_SITEMAP_SOURCE = "sitemap_source" # URL of the sitemap file where the URL was found
 COL_IS_ACTIVE = "is_active" # To mark if URL is currently in any sitemap
 
 # For changes log
 COL_CHANGE_TYPE = "change_type"
 COL_OLD_LASTMOD = "old_lastmod"
-COL_NEW_LASTMOD = "new_lastmod"
+COL_NEW_LASTMOD = "new_new_lastmod" # Typo in original, but will be superseded by code logic
 COL_DETECTED_AT = "detected_at"
 
 
@@ -40,22 +40,20 @@ class DataProcessor:
             'parquet': f"{base_path}.parquet",
             'csv': f"{base_path}.csv",
             'json': f"{base_path}.json",
-            'log': os.path.join(self.data_dir, f"{domain}_processing.log"), # Standard text log
-            'change_log_csv': os.path.join(self.data_dir, f"{domain}_changes_history.csv") # New historical change log
+            'log': os.path.join(self.data_dir, f"{domain}_processing.log"),
+            'change_log_csv': os.path.join(self.data_dir, f"{domain}_changes_history.csv")
         }
     
     def _save_change_log(self, changes_df: pd.DataFrame, change_log_path: str) -> None:
         """Appends detected changes to a CSV log file."""
         if changes_df.empty:
-            # logger.debug("No changes to save in historical change log for this operation.")
             return
 
         try:
+            # Define column order for the change log, excluding priority and changefreq
             change_log_columns = [
                 'detected_at', 'domain', 'loc', 'change_type', 
-                'lastmod', 'lastmod_prev', 'sitemap_source_url',
-                'priority', 'priority_prev', 
-                'changefreq', 'changefreq_prev'
+                'lastmod', 'lastmod_prev', 'sitemap_source_url'
             ]
             
             final_changes_df = pd.DataFrame(columns=change_log_columns)
@@ -79,15 +77,15 @@ class DataProcessor:
         Process and store sitemap URLs for a specific domain, tracking changes.
         Saves a snapshot of the current state and appends changes to a historical log.
         If the historical log doesn't exist, it's seeded with the current snapshot data.
-        Core fields are 'loc' (URL) and 'lastmod'; other fields are optional.
+        Only 'loc' and 'lastmod' (and sitemap_source_url) are processed and stored.
         """
-        logger.info(f"Processing {len(sitemap_urls)} URLs for domain: {domain} using new logic")
+        logger.info(f"Processing {len(sitemap_urls)} URLs for domain: {domain} (priority/changefreq excluded)")
         file_paths = self._get_file_paths(domain)
         current_dt = datetime.now(timezone.utc)
 
+        # Define canonical columns for the main snapshot data, excluding priority and changefreq
         snapshot_columns = [
-            'loc', 'domain', 'lastmod', 'detected_at', 'change_type', 'sitemap_source_url',
-            'changefreq', 'priority'
+            'loc', 'domain', 'lastmod', 'detected_at', 'change_type', 'sitemap_source_url'
         ]
         change_log_csv_path = file_paths['change_log_csv']
         parquet_file_path = file_paths['parquet']
@@ -96,8 +94,10 @@ class DataProcessor:
         if os.path.exists(parquet_file_path):
             try:
                 existing_snapshot_df = pd.read_parquet(parquet_file_path)
-                required_cols_for_snapshot = ['loc', 'lastmod', 'priority', 'changefreq', 'sitemap_source_url', 'domain', 'detected_at', 'change_type']
-                for col in required_cols_for_snapshot:
+                # Ensure essential columns exist for consistent processing
+                # We don't care about priority/changefreq from old files anymore
+                required_cols_for_snapshot_load = ['loc', 'lastmod', 'sitemap_source_url', 'domain', 'detected_at', 'change_type']
+                for col in required_cols_for_snapshot_load:
                     if col not in existing_snapshot_df.columns:
                         existing_snapshot_df[col] = None
                 logger.info(f"Loaded existing snapshot with {len(existing_snapshot_df)} URLs from {parquet_file_path}.")
@@ -119,46 +119,44 @@ class DataProcessor:
                         'change_type': 'new',
                         'lastmod': row.get('lastmod'),
                         'lastmod_prev': None,
-                        'sitemap_source_url': row.get('sitemap_source_url'),
-                        'priority': row.get('priority'), 'priority_prev': None,
-                        'changefreq': row.get('changefreq'), 'changefreq_prev': None
+                        'sitemap_source_url': row.get('sitemap_source_url')
+                        # priority and changefreq intentionally omitted
                     })
                 if backfill_changes_records:
                     self._save_change_log(pd.DataFrame(backfill_changes_records), change_log_csv_path)
             else:
                 logger.info("No existing snapshot to backfill historical log. Log will start from current fetch.")
 
-        current_sitemap_live_df = pd.DataFrame()
-        if not sitemap_urls:
-            logger.info(f"No URLs in current live sitemap fetch for {domain}.")
-            current_sitemap_live_df = pd.DataFrame(columns=['loc', 'lastmod', 'priority', 'changefreq', 'sitemap_source_url'])
-        else:
-            current_sitemap_live_df = pd.DataFrame(sitemap_urls)
-            for col in ['loc', 'lastmod']:
-                if col not in current_sitemap_live_df.columns:
-                    logger.warning(f"Essential col '{col}' missing in live sitemap for {domain}. Adding as None.")
-                    current_sitemap_live_df[col] = None
-            for col in ['changefreq', 'priority', 'sitemap_source_url']:
-                if col not in current_sitemap_live_df.columns:
-                    current_sitemap_live_df[col] = None
+        # Process live sitemap URLs, focusing only on loc, lastmod, sitemap_source_url
+        processed_live_urls = []
+        if sitemap_urls:
+            for item in sitemap_urls:
+                if item and isinstance(item, dict) and item.get('loc'):
+                    processed_live_urls.append({
+                        'loc': item.get('loc'),
+                        'lastmod': item.get('lastmod'),
+                        'sitemap_source_url': item.get('sitemap_source_url') # Keep if provided by parser
+                    })
+        
+        current_sitemap_live_df = pd.DataFrame(processed_live_urls)
+        if current_sitemap_live_df.empty:
+             logger.info(f"No valid URLs (with loc) in current live sitemap fetch for {domain}.")
+             # Ensure schema if empty
+             current_sitemap_live_df = pd.DataFrame(columns=['loc', 'lastmod', 'sitemap_source_url'])
+        
         current_sitemap_live_df['domain'] = domain
 
-        # Deduplicate current_sitemap_live_df by 'loc', keeping the one with the "best" lastmod
         if not current_sitemap_live_df.empty and 'loc' in current_sitemap_live_df.columns:
             num_before_dedupe = len(current_sitemap_live_df)
             if 'lastmod' in current_sitemap_live_df.columns:
-                # Convert lastmod to datetime for proper sorting, handle NaT (Not a Time)
-                # Errors='coerce' will turn unparseable dates into NaT
                 current_sitemap_live_df['lastmod_dt'] = pd.to_datetime(current_sitemap_live_df['lastmod'], errors='coerce')
-                # Sort by loc, then by lastmod_dt (descending, NaT will be at the end)
                 current_sitemap_live_df = current_sitemap_live_df.sort_values(
                     by=['loc', 'lastmod_dt'], 
-                    ascending=[True, False], # loc ascending, lastmod_dt descending (recent first)
-                    na_position='last' # Put NaT dates at the bottom for a group
+                    ascending=[True, False],
+                    na_position='last'
                 )
                 current_sitemap_live_df = current_sitemap_live_df.drop(columns=['lastmod_dt'])
             else:
-                # If no lastmod column, just sort by loc for stable deduplication
                 current_sitemap_live_df = current_sitemap_live_df.sort_values(by=['loc'], ascending=[True])
             
             current_sitemap_live_df = current_sitemap_live_df.drop_duplicates(subset=['loc'], keep='first')
@@ -177,28 +175,32 @@ class DataProcessor:
                 current_run_changes_records.append({
                     'detected_at': current_dt, 'domain': domain, 'loc': loc_val, 'change_type': 'new',
                     'lastmod': row.get('lastmod'), 'lastmod_prev': None,
-                    'sitemap_source_url': row.get('sitemap_source_url'),
-                    'priority': row.get('priority'), 'priority_prev': None,
-                    'changefreq': row.get('changefreq'), 'changefreq_prev': None
+                    'sitemap_source_url': row.get('sitemap_source_url')
+                    # priority and changefreq intentionally omitted
                 })
                 output_df_rows.append({
                     'loc': loc_val, 'domain': domain, 'lastmod': row.get('lastmod'), 
                     'detected_at': current_dt, 'change_type': 'new', 
-                    'sitemap_source_url': row.get('sitemap_source_url'),
-                    'priority': row.get('priority'), 'changefreq': row.get('changefreq')
+                    'sitemap_source_url': row.get('sitemap_source_url')
+                    # priority and changefreq intentionally omitted
                 })
         else:
             prev_rename_map = {
-                'lastmod': 'lastmod_prev', 'priority': 'priority_prev', 
-                'changefreq': 'changefreq_prev', 'sitemap_source_url': 'sitemap_source_url_prev'
+                'lastmod': 'lastmod_prev', 
+                'sitemap_source_url': 'sitemap_source_url_prev'
+                # No priority/changefreq in rename map
             }
-            prev_cols_for_merge = ['loc'] + [col for col in ['lastmod', 'priority', 'changefreq', 'sitemap_source_url'] if col in existing_snapshot_df.columns]
+            # Only select loc, lastmod, sitemap_source_url from existing snapshot for merge comparison
+            prev_cols_for_merge = ['loc']
+            if 'lastmod' in existing_snapshot_df.columns: prev_cols_for_merge.append('lastmod')
+            if 'sitemap_source_url' in existing_snapshot_df.columns: prev_cols_for_merge.append('sitemap_source_url')
             
+            # Ensure 'loc' is in current_sitemap_live_df before merge
             if 'loc' not in current_sitemap_live_df.columns:
-                 current_sitemap_live_df['loc'] = None
+                 current_sitemap_live_df['loc'] = None 
 
             merged_df = current_sitemap_live_df.merge(
-                existing_snapshot_df[prev_cols_for_merge].rename(columns=prev_rename_map),
+                existing_snapshot_df[list(set(prev_cols_for_merge))].rename(columns=prev_rename_map), # Use set to ensure unique cols
                 on='loc',
                 how='outer',
                 indicator=True
@@ -209,13 +211,9 @@ class DataProcessor:
                 if pd.isna(loc): continue
 
                 current_lastmod = row.get('lastmod')
-                current_priority = row.get('priority')
-                current_changefreq = row.get('changefreq')
                 current_sitemap_source = row.get('sitemap_source_url')
 
                 prev_lastmod = row.get('lastmod_prev')
-                prev_priority = row.get('priority_prev')
-                prev_changefreq = row.get('changefreq_prev')
                 prev_sitemap_source = row.get('sitemap_source_url_prev')
                 
                 sitemap_source_for_log = current_sitemap_source if pd.notna(current_sitemap_source) else prev_sitemap_source
@@ -227,54 +225,41 @@ class DataProcessor:
                     change_type = 'new'
                     current_run_changes_records.append({
                         **change_data_base, 'change_type': change_type, 
-                        'lastmod': current_lastmod, 'lastmod_prev': None,
-                        'priority': current_priority, 'priority_prev': None,
-                        'changefreq': current_changefreq, 'changefreq_prev': None
+                        'lastmod': current_lastmod, 'lastmod_prev': None
                     })
                     output_df_rows.append({
-                        **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod,
-                        'priority': current_priority, 'changefreq': current_changefreq
+                        **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
                     })
                 elif row['_merge'] == 'right_only':
                     change_type = 'removed'
                     current_run_changes_records.append({
                         **change_data_base, 'change_type': change_type, 
-                        'lastmod': None, 'lastmod_prev': prev_lastmod,
-                        'priority': None, 'priority_prev': prev_priority,
-                        'changefreq': None, 'changefreq_prev': prev_changefreq
+                        'lastmod': None, 'lastmod_prev': prev_lastmod
                     })
                     output_df_rows.append({
                         'loc': loc, 'domain': domain, 'lastmod': prev_lastmod,
                         'detected_at': current_dt, 'change_type': change_type, 
-                        'sitemap_source_url': prev_sitemap_source,
-                        'priority': prev_priority, 'changefreq': prev_changefreq
+                        'sitemap_source_url': prev_sitemap_source
                     })
                 elif row['_merge'] == 'both':
                     updated = False
+                    # Update status is now SOLELY based on lastmod
                     if current_lastmod != prev_lastmod and not (pd.isna(current_lastmod) and pd.isna(prev_lastmod)):
-                        updated = True
-                    if not updated and current_priority != prev_priority and not (pd.isna(current_priority) and pd.isna(prev_priority)):
-                        updated = True
-                    if not updated and current_changefreq != prev_changefreq and not (pd.isna(current_changefreq) and pd.isna(prev_changefreq)):
                         updated = True
                     
                     if updated:
                         change_type = 'updated'
                         current_run_changes_records.append({
                             **change_data_base, 'change_type': change_type,
-                            'lastmod': current_lastmod, 'lastmod_prev': prev_lastmod,
-                            'priority': current_priority, 'priority_prev': prev_priority,
-                            'changefreq': current_changefreq, 'changefreq_prev': prev_changefreq
+                            'lastmod': current_lastmod, 'lastmod_prev': prev_lastmod
                         })
                         output_df_rows.append({
-                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod,
-                            'priority': current_priority, 'changefreq': current_changefreq
+                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
                         })
                     else:
                         change_type = 'unchanged'
                         output_df_rows.append({
-                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod,
-                            'priority': current_priority, 'changefreq': current_changefreq
+                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
                         })
         
         output_df = pd.DataFrame(columns=snapshot_columns)

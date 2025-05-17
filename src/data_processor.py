@@ -143,6 +143,29 @@ class DataProcessor:
                     current_sitemap_live_df[col] = None
         current_sitemap_live_df['domain'] = domain
 
+        # Deduplicate current_sitemap_live_df by 'loc', keeping the one with the "best" lastmod
+        if not current_sitemap_live_df.empty and 'loc' in current_sitemap_live_df.columns:
+            num_before_dedupe = len(current_sitemap_live_df)
+            if 'lastmod' in current_sitemap_live_df.columns:
+                # Convert lastmod to datetime for proper sorting, handle NaT (Not a Time)
+                # Errors='coerce' will turn unparseable dates into NaT
+                current_sitemap_live_df['lastmod_dt'] = pd.to_datetime(current_sitemap_live_df['lastmod'], errors='coerce')
+                # Sort by loc, then by lastmod_dt (descending, NaT will be at the end)
+                current_sitemap_live_df = current_sitemap_live_df.sort_values(
+                    by=['loc', 'lastmod_dt'], 
+                    ascending=[True, False], # loc ascending, lastmod_dt descending (recent first)
+                    na_position='last' # Put NaT dates at the bottom for a group
+                )
+                current_sitemap_live_df = current_sitemap_live_df.drop(columns=['lastmod_dt'])
+            else:
+                # If no lastmod column, just sort by loc for stable deduplication
+                current_sitemap_live_df = current_sitemap_live_df.sort_values(by=['loc'], ascending=[True])
+            
+            current_sitemap_live_df = current_sitemap_live_df.drop_duplicates(subset=['loc'], keep='first')
+            num_after_dedupe = len(current_sitemap_live_df)
+            if num_before_dedupe > num_after_dedupe:
+                logger.info(f"Deduplicated live sitemap URLs by 'loc': {num_before_dedupe} before, {num_after_dedupe} after for domain {domain}.")
+
         current_run_changes_records = []
         output_df_rows = []
 

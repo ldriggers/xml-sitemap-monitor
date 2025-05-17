@@ -9,6 +9,8 @@ on:
 jobs:
   run-sitemap-check: # Changed from 'monitor_sitemaps' to 'run-sitemap-check' to match initial file.
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout repository

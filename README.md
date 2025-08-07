@@ -35,7 +35,6 @@ This initial version does **not** store the actual content of the web pages, onl
 │   └── prd.md                   # Product requirements document
 └── README.md                  # This file
 ```
-(Note: The main project directory `competitive_content_monitoring` might be the root in your local setup if you cloned it directly, or a subdirectory if it's part of a larger workspace.)
 
 ## Setup
 

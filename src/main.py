@@ -24,6 +24,7 @@ from src.config import load_config, CONFIG_FILE_PATH
 from src.sitemap_fetcher import SitemapFetcher
 from src.sitemap_parser import SitemapParser
 from src.data_processor import DataProcessor
+from src.robots_checker import RobotsChecker
 
 # 1.1 Setup logging
 logging.basicConfig(
@@ -41,29 +42,41 @@ logger = logging.getLogger(__name__)
 BANKRATE_USER_AGENT = "Mozilla/5.0 (compatible; Bankratebot/1.0; +https://www.bankrate.com)"
 BANKRATE_DOMAINS = ["bankrate.com", "www.bankrate.com"]
 
-# Bot user agents for competitor crawling
-# Mix of AI bots and traditional search engine bots
+# =============================================================================
+# BOT USER AGENTS FOR COMPETITOR CRAWLING
+# All documented bots that respect robots.txt
+# We filter by robots.txt, then pick randomly from what's allowed
+# Source: https://dejan.ai/blog/ai-bots/ (Nov 2025)
+# =============================================================================
+
 COMPETITOR_BOT_USER_AGENTS = [
+    # Our own bot
+    "Mozilla/5.0 (compatible; SitemapMonitor/1.0; +https://github.com/ldriggers/xml-sitemap-monitor)",
     # OpenAI bots
-    "Mozilla/5.0 (compatible; GPTBot/1.0; +https://openai.com/gptbot)",
-    "Mozilla/5.0 (compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot)",
-    "Mozilla/5.0 (compatible; ChatGPT-User/1.0; +https://openai.com/chatgpt-user)",
-    # Anthropic/Claude bots
-    "Mozilla/5.0 (compatible; ClaudeBot/1.0; +https://www.anthropic.com/claude)",
-    "Mozilla/5.0 (compatible; Claude-User/1.0; +https://www.anthropic.com)",
-    "Mozilla/5.0 (compatible; Claude-SearchBot/1.0; +https://www.anthropic.com)",
-    # Perplexity bot
-    "Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/bot)",
-    # Google bots
-    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    # Bing bots
-    "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
-    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.84 Mobile Safari/537.36 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
-    # Other search engines
-    "Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.1; +https://openai.com/gptbot)",
+    # Other search/AI bots
     "Mozilla/5.0 (compatible; DuckDuckBot/1.1; +http://duckduckgo.com/duckduckbot)",
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; MistralAI-User/1.0; +https://docs.mistral.ai/robots)",
+    # Anthropic
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)",
+    # Perplexity
+    "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)",
 ]
+
+# Browser fallback when no bots are allowed
+BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+# Module-level robots checker (caches robots.txt)
+_robots_checker = None
+
+def get_robots_checker() -> RobotsChecker:
+    """Get or create the robots checker singleton."""
+    global _robots_checker
+    if _robots_checker is None:
+        _robots_checker = RobotsChecker()
+    return _robots_checker
 
 
 def get_user_agent(config: Dict[str, Any], domain: str) -> str:
@@ -72,7 +85,8 @@ def get_user_agent(config: Dict[str, Any], domain: str) -> str:
     
     Logic:
     - Bankrate domains → Bankratebot (our own properties)
-    - Competitor domains → Random bot from rotation
+    - Competitor domains → Random bot from allowed bots (respects robots.txt)
+    - If all bots blocked → Use browser UA
     - Config override → Use if explicitly set
     
     Args:
@@ -93,10 +107,23 @@ def get_user_agent(config: Dict[str, Any], domain: str) -> str:
         logger.info(f"Using Bankratebot for own property: {domain}")
         return BANKRATE_USER_AGENT
     
-    # Use random bot for competitor domains
-    selected = random.choice(COMPETITOR_BOT_USER_AGENTS)
-    logger.info(f"Using random bot for competitor {domain}: {selected[:50]}...")
-    return selected
+    # For competitor domains: filter by robots.txt, pick randomly from allowed
+    robots_checker = get_robots_checker()
+    
+    # Get domain with www prefix if needed
+    check_domain = domain if domain.startswith("www.") else f"www.{domain}"
+    
+    # Filter to only allowed bots, then pick randomly
+    allowed_bots = robots_checker.filter_allowed_bots(check_domain, COMPETITOR_BOT_USER_AGENTS)
+    
+    if allowed_bots:
+        selected = random.choice(allowed_bots)
+        logger.info(f"Using bot for {domain}: {selected[:50]}...")
+        return selected
+    
+    # All bots blocked - use browser UA (will trigger stealth if needed)
+    logger.warning(f"All bots blocked by robots.txt for {domain}, using browser UA")
+    return BROWSER_USER_AGENT
 
 
 def calculate_startup_jitter(domain: str, random_config: Dict[str, Any]) -> int:

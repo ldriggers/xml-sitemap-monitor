@@ -23,16 +23,16 @@ sys.path.insert(0, str(PROJECT_ROOT.parent / "10.07-seo-intel-common"))
 RESULTS = []
 
 def log(name: str, passed: bool, detail: str = ""):
-    status = "✅" if passed else "❌"
+    status = "[OK]" if passed else "[FAIL]"
     RESULTS.append({"name": name, "passed": passed})
-    print(f"  {status} {name}" + (f" → {detail}" if detail else ""))
+    print(f"  {status} {name}" + (f" -> {detail}" if detail else ""))
 
 # =============================================================================
 # 1. IMPORTS (3 tests)
 # =============================================================================
 
 def test_imports():
-    print("\n📦 IMPORTS")
+    print("\n[1] IMPORTS")
     
     # 1.1 Core modules
     try:
@@ -61,7 +61,7 @@ def test_imports():
 # =============================================================================
 
 def test_config():
-    print("\n⚙️  CONFIG")
+    print("\n[2] CONFIG")
     
     config_path = PROJECT_ROOT / "config.json"
     
@@ -90,7 +90,7 @@ def test_config():
 # =============================================================================
 
 def test_parsing():
-    print("\n📄 PARSING")
+    print("\n[3] PARSING")
     
     try:
         from src.sitemap_parser import SitemapParser
@@ -142,7 +142,7 @@ def test_parsing():
 # =============================================================================
 
 def test_change_detection():
-    print("\n🔄 CHANGE DETECTION")
+    print("\n[4] CHANGE DETECTION")
     
     try:
         from src.data_processor import DataProcessor
@@ -162,7 +162,7 @@ def test_change_detection():
 # =============================================================================
 
 def test_data_schema():
-    print("\n💾 DATA SCHEMA")
+    print("\n[5] DATA SCHEMA")
     
     data_dir = PROJECT_ROOT / "output"
     bankrate_dir = data_dir / "bankrate.com"
@@ -199,7 +199,7 @@ def test_data_schema():
 # =============================================================================
 
 def test_wiring():
-    print("\n🔗 WIRING")
+    print("\n[6] WIRING")
     
     # 6.1 DataProcessor
     try:
@@ -235,7 +235,7 @@ def test_wiring():
 # =============================================================================
 
 def test_concurrency():
-    print("\n⚡ CONCURRENCY")
+    print("\n[7] CONCURRENCY")
     
     # 7.1 Main.py has ThreadPoolExecutor
     try:
@@ -275,7 +275,7 @@ def test_concurrency():
 # =============================================================================
 
 def test_workflows():
-    print("\n🔄 WORKFLOWS")
+    print("\n[8] WORKFLOWS")
     
     workflows_dir = PROJECT_ROOT / ".github" / "workflows"
     
@@ -301,7 +301,7 @@ def test_workflows():
 # =============================================================================
 
 def test_schema_consistency():
-    print("\n📊 SCHEMA CONSISTENCY")
+    print("\n[9] SCHEMA CONSISTENCY")
     
     data_dir = PROJECT_ROOT / "output"
     expected_cols = 12
@@ -334,7 +334,7 @@ def test_schema_consistency():
 def run_all():
     start = datetime.now()
     print("\n" + "=" * 50)
-    print("🧪 SMOKE TESTS (Fast, Deterministic)")
+    print("SMOKE TESTS (Fast, Deterministic)")
     print("=" * 50)
     
     test_imports()
@@ -353,9 +353,9 @@ def run_all():
     
     print("\n" + "=" * 50)
     if passed == total:
-        print(f"🎉 ALL PASSED: {passed}/{total} in {duration:.2f}s")
+        print(f"ALL PASSED: {passed}/{total} in {duration:.2f}s")
     else:
-        print(f"⚠️  {passed}/{total} passed in {duration:.2f}s")
+        print(f"FAILED: {passed}/{total} passed in {duration:.2f}s")
         print("\nFailed:")
         for r in RESULTS:
             if not r["passed"]:

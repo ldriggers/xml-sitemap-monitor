@@ -64,6 +64,7 @@
   ],
   "user_agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot",
   "data_directory": "data",
+  "max_concurrent_domains": 4,
   "stealth": {
     "enabled": false,
     "max_startup_jitter_seconds": 0

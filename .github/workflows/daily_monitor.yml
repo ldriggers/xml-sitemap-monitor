@@ -40,6 +40,14 @@ jobs:
       - name: Run sitemap check
         run: python -m src.main
       
+      - name: Upload data as artifact (backup before push)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitemap-data-${{ github.run_id }}
+          path: data/
+          retention-days: 7
+          if-no-files-found: ignore
+      
       - name: Commit and push if changed (with retry)
         run: |
           git config --local user.email "action@github.com"

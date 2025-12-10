@@ -36,12 +36,16 @@ from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlparse
 from glob import glob
 
-# Try to import StealthFetcher from shared library
+# Import StealthFetcher - prefer shared library, fallback to local copy
 try:
     from seo_intel.stealth import StealthFetcher, ProbeResult
     STEALTH_AVAILABLE = True
 except ImportError:
-    STEALTH_AVAILABLE = False
+    try:
+        from src.stealth import StealthFetcher, ProbeResult
+        STEALTH_AVAILABLE = True
+    except ImportError:
+        STEALTH_AVAILABLE = False
 
 logging.basicConfig(
     level=logging.INFO,

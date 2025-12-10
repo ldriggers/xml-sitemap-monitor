@@ -18,12 +18,16 @@ import logging
 import time
 from typing import Optional, Dict, Any
 
-# Try to import StealthFetcher from shared library
+# Import StealthFetcher - prefer shared library, fallback to local copy
 try:
     from seo_intel.stealth import StealthFetcher, ProbeResult
     STEALTH_AVAILABLE = True
 except ImportError:
-    STEALTH_AVAILABLE = False
+    try:
+        from src.stealth import StealthFetcher, ProbeResult
+        STEALTH_AVAILABLE = True
+    except ImportError:
+        STEALTH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +179,10 @@ class SitemapFetcher:
                 )
                 return response.text
             
-            # 2.4.5 Try StealthFetcher fallback on 403
-            elif response.status_code == 403 and self.stealth_fallback and self.stealth_fetcher:
+            # 2.4.5 Try StealthFetcher fallback on 402/403 (blocking responses)
+            elif response.status_code in (402, 403) and self.stealth_fallback and self.stealth_fetcher:
                 logger.warning(
-                    f"Got 403 for {sitemap_url}, trying StealthFetcher fallback..."
+                    f"Got {response.status_code} for {sitemap_url}, trying StealthFetcher fallback..."
                 )
                 return self._stealth_fallback(sitemap_url)
             

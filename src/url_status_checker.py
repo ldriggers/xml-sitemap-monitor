@@ -95,20 +95,51 @@ COMPETITOR_BOT_USER_AGENTS = [
 
 DEFAULT_USER_AGENT = COMPETITOR_BOT_USER_AGENTS[0]
 
+# Browser UA for when bots are blocked (matches stealth.py)
+BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-def get_user_agent_for_url(url: str) -> str:
+
+def get_user_agent_for_domain(domain: str, stealth_fetcher=None) -> str:
     """
-    1.3 Get appropriate user agent based on URL domain.
+    1.3 Get appropriate user agent based on domain.
     
-    - Bankrate URLs → Bankratebot (our own property)
-    - Competitor URLs → Random bot from rotation
+    Priority:
+    1. Bankrate domains → Bankratebot (our own property)
+    2. Known working stealth strategy → Use that (from sitemap fetch)
+    3. Fallback → Browser UA (same as stealth)
+    
+    This ensures status checks use what already worked for sitemaps.
     """
-    # Check if URL is a Bankrate property
-    if any(bd in url for bd in BANKRATE_DOMAINS):
+    # Bankrate = our own property
+    if any(bd in domain for bd in BANKRATE_DOMAINS):
         return BANKRATE_USER_AGENT
     
-    # Random bot for competitors
-    return random.choice(COMPETITOR_BOT_USER_AGENTS)
+    # Check if we have a working stealth strategy for this domain
+    if stealth_fetcher:
+        domain_with_www = domain if domain.startswith("www.") else f"www.{domain}"
+        status = stealth_fetcher.get_domain_status(domain_with_www)
+        working = status.get("working_strategies", [])
+        
+        if working:
+            # Use browser UA that matches the working strategy
+            # (All our stealth strategies use Chrome/browser fingerprints)
+            logger.info(f"Using browser UA for {domain} (stealth strategy worked: {working[0]})")
+            return BROWSER_USER_AGENT
+    
+    # Fallback: browser UA (consistent with stealth approach)
+    return BROWSER_USER_AGENT
+
+
+def get_user_agent_for_url(url: str, stealth_fetcher=None) -> str:
+    """
+    1.3.1 Get appropriate user agent based on URL.
+    
+    Wrapper that extracts domain from URL.
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    return get_user_agent_for_domain(domain, stealth_fetcher)
 
 
 def load_config() -> Dict:
@@ -336,7 +367,8 @@ def _stealth_head_fallback(url: str) -> Optional[Dict]:
 def check_url_head(
     url: str,
     user_agent: Optional[str] = None,
-    timeout: int = DEFAULT_TIMEOUT
+    timeout: int = DEFAULT_TIMEOUT,
+    stealth_fetcher=None
 ) -> Dict:
     """
     3.0 Check URL status using HEAD request only.
@@ -353,20 +385,21 @@ def check_url_head(
     
     User agent selection:
     - Bankrate URLs → Bankratebot (our own property)
-    - Competitor URLs → Random bot from rotation
+    - Competitor URLs → Browser UA (matches stealth strategy that worked)
     
     Args:
         url: URL to check
-        user_agent: Override user agent (if None, auto-selects based on URL domain)
+        user_agent: Override user agent (if None, auto-selects based on domain)
         timeout: Request timeout in seconds
+        stealth_fetcher: StealthFetcher instance to check for working strategies
     
     Returns dict with flattened key headers + full headers as JSON.
     """
-    # 3.0.1 Select user agent based on URL domain (Bankrate vs competitor)
+    # 3.0.1 Select user agent based on domain (use what worked for sitemap)
     if user_agent:
         selected_ua = user_agent
     else:
-        selected_ua = get_user_agent_for_url(url)
+        selected_ua = get_user_agent_for_url(url, stealth_fetcher)
     
     result = {
         'url': url,
@@ -778,7 +811,8 @@ def check_urls_for_domain(
     domain: str,
     config: Dict,
     data_dir: str = "output",
-    force: bool = False
+    force: bool = False,
+    stealth_fetcher=None
 ) -> Optional[pd.DataFrame]:
     """
     5.0 Run status checks for a domain.
@@ -787,8 +821,13 @@ def check_urls_for_domain(
     - Random shuffle of URL order (avoid sequential patterns)
     - Random delay between requests (1-3s, politeness not stealth)
     - Full header capture for SEO intelligence
+    - Uses browser UA that worked for sitemap fetch (via stealth_fetcher)
     """
     domain_config = get_domain_status_config(config, domain)
+    
+    # Initialize stealth fetcher if not provided (to check what worked for sitemaps)
+    if stealth_fetcher is None and STEALTH_AVAILABLE:
+        stealth_fetcher = StealthFetcher()
     
     # Check if enabled
     if not domain_config.get("enabled", True) and not force:
@@ -854,8 +893,9 @@ def check_urls_for_domain(
         
         result = check_url_head(
             url,
-            user_agent=None,  # Auto-select based on URL domain
-            timeout=domain_config.get("timeout", DEFAULT_TIMEOUT)
+            user_agent=None,  # Auto-select based on domain (uses what worked for sitemap)
+            timeout=domain_config.get("timeout", DEFAULT_TIMEOUT),
+            stealth_fetcher=stealth_fetcher
         )
         
         # Add context from change log

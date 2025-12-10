@@ -40,14 +40,35 @@ jobs:
       - name: Run sitemap check
         run: python -m src.main
       
-      - name: Commit and push if changed
+      - name: Commit and push if changed (with retry)
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add data/
           if ! git diff --staged --quiet; then
             git commit -m "Update sitemap data [skip ci]"
-            git push
+            
+            # Retry push up to 3 times with pull-rebase
+            MAX_RETRIES=3
+            RETRY=0
+            while [ $RETRY -lt $MAX_RETRIES ]; do
+              if git push; then
+                echo "Push successful"
+                break
+              else
+                RETRY=$((RETRY + 1))
+                echo "Push failed, attempt $RETRY of $MAX_RETRIES"
+                if [ $RETRY -lt $MAX_RETRIES ]; then
+                  echo "Pulling and rebasing..."
+                  git pull --rebase origin main
+                fi
+              fi
+            done
+            
+            if [ $RETRY -eq $MAX_RETRIES ]; then
+              echo "Push failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
           else
             echo "No data changes to commit."
           fi

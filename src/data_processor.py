@@ -37,12 +37,12 @@ class DataProcessor:
     Processes sitemap URLs, detects changes, and maintains historical records.
     """
 
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "output"):
         """
         2.1 Initialize the data processor.
         
         Args:
-            data_dir: Root directory for data storage (default: "data")
+            data_dir: Root directory for data storage (default: "output")
         """
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
@@ -57,7 +57,7 @@ class DataProcessor:
         3.1 Generate file paths for URL-level data for a given domain.
         
         Layout (CSV-only):
-            data/
+            output/
                 bankrate.com/
                     bankrate.com_urls.csv           (current snapshot)
                     bankrate.com_urls_all_time.csv  (all URLs ever seen)

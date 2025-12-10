@@ -164,7 +164,7 @@ def test_change_detection():
 def test_data_schema():
     print("\n💾 DATA SCHEMA")
     
-    data_dir = PROJECT_ROOT / "data"
+    data_dir = PROJECT_ROOT / "output"
     bankrate_dir = data_dir / "bankrate.com"
     
     # 5.1 Folder structure
@@ -303,7 +303,7 @@ def test_workflows():
 def test_schema_consistency():
     print("\n📊 SCHEMA CONSISTENCY")
     
-    data_dir = PROJECT_ROOT / "data"
+    data_dir = PROJECT_ROOT / "output"
     expected_cols = 12
     
     for domain in ["bankrate.com", "nerdwallet.com"]:

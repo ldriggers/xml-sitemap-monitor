@@ -165,7 +165,7 @@ class CircuitBreaker:
     Tracks failure rates and prevents checking when too many failures occur.
     """
     
-    def __init__(self, domain: str, data_dir: str = "data"):
+    def __init__(self, domain: str, data_dir: str = "output"):
         self.domain = domain
         self.data_dir = data_dir
         self.state_file = os.path.join(data_dir, domain, f"{domain}_status_check_state.json")
@@ -773,7 +773,7 @@ def get_urls_to_check(
 def check_urls_for_domain(
     domain: str,
     config: Dict,
-    data_dir: str = "data",
+    data_dir: str = "output",
     force: bool = False
 ) -> Optional[pd.DataFrame]:
     """
@@ -905,7 +905,7 @@ def check_urls_for_domain(
     return pd.DataFrame(results) if results else None
 
 
-def save_daily_history(df: pd.DataFrame, domain: str, data_dir: str = "data") -> str:
+def save_daily_history(df: pd.DataFrame, domain: str, data_dir: str = "output") -> str:
     """
     6.0 Save status check results to daily history file.
     
@@ -968,7 +968,7 @@ def save_daily_history(df: pd.DataFrame, domain: str, data_dir: str = "data") ->
     return history_path
 
 
-def generate_redirect_map(df: pd.DataFrame, domain: str, data_dir: str = "data") -> Optional[str]:
+def generate_redirect_map(df: pd.DataFrame, domain: str, data_dir: str = "output") -> Optional[str]:
     """
     7.0 Generate old -> new URL mapping from redirects.
     """
@@ -1113,7 +1113,7 @@ def main():
     )
     parser.add_argument(
         "--data-dir",
-        default="data",
+        default="output",
         help="Data directory (default: data)"
     )
     parser.add_argument(

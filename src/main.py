@@ -401,7 +401,7 @@ def main():
         return
 
     # 5.2 Initialize components
-    data_dir = config.get("data_directory", "data")
+    data_dir = config.get("data_directory", "output")
     os.makedirs(data_dir, exist_ok=True)
 
     data_processor = DataProcessor(data_dir=data_dir)

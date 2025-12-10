@@ -1,306 +1,620 @@
+"""
+1.0 Data Processor Module
+Handles sitemap URL processing, change detection, and data storage.
+
+Key features:
+- Per-domain folder structure with domain-prefixed filenames
+- Monthly change log files to prevent size bloat
+- All-time URL tracking with current_live vs old_live status
+- URL path/section categorization for content analysis
+- CSV-only output (removed Parquet/JSON for simplicity)
+"""
+
 import pandas as pd
 import os
 import logging
-from typing import List, Dict, Tuple, Optional, Any
+from glob import glob
+from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# Define column names to ensure consistency
-COL_URL = "url"
+# 1.1 Column name constants for consistency
+COL_LOC = "loc"
 COL_DOMAIN = "domain"
-COL_COMPETITOR_NAME = "competitor_name"
-COL_FIRST_SEEN_AT = "first_seen_at"
-COL_LAST_SEEN_AT = "last_seen_at"
 COL_LASTMOD = "lastmod"
-# COL_CHANGEFREQ = "changefreq" # No longer used
-# COL_PRIORITY = "priority" # No longer used
-COL_SITEMAP_SOURCE = "sitemap_source" # URL of the sitemap file where the URL was found
-COL_IS_ACTIVE = "is_active" # To mark if URL is currently in any sitemap
-
-# For changes log
-COL_CHANGE_TYPE = "change_type"
-COL_OLD_LASTMOD = "old_lastmod"
-COL_NEW_LASTMOD = "new_new_lastmod" # Typo in original, but will be superseded by code logic
+COL_SITEMAP_SOURCE = "sitemap_source_url"
 COL_DETECTED_AT = "detected_at"
+COL_CHANGE_TYPE = "change_type"
+COL_SECTION = "section"
+COL_SUBSECTION = "subsection"
+COL_PATH_DEPTH = "path_depth"
 
 
 class DataProcessor:
+    """
+    2.0 DataProcessor Class
+    Processes sitemap URLs, detects changes, and maintains historical records.
+    """
+
     def __init__(self, data_dir: str = "data"):
-        """Initialize the data processor with a directory for data storage."""
+        """
+        2.1 Initialize the data processor.
+        
+        Args:
+            data_dir: Root directory for data storage (default: "data")
+        """
         self.data_dir = data_dir
         os.makedirs(self.data_dir, exist_ok=True)
         logger.info(f"DataProcessor initialized with data directory: {data_dir}")
-        
+
+    # =========================================================================
+    # 3.0 FILE PATH HELPERS
+    # =========================================================================
+
     def _get_file_paths(self, domain: str) -> Dict[str, str]:
-        """Generate file paths for different formats based on domain name."""
-        base_path = os.path.join(self.data_dir, f"{domain}_urls")
+        """
+        3.1 Generate file paths for URL-level data for a given domain.
+        
+        Layout (CSV-only):
+            data/
+                bankrate.com/
+                    bankrate.com_urls.csv           (current snapshot)
+                    bankrate.com_urls_all_time.csv  (all URLs ever seen)
+                    bankrate.com_sitemaps.csv       (sitemap file metadata)
+                    bankrate.com_changes_YYYY-MM.csv (monthly changes)
+        
+        Args:
+            domain: The domain name (e.g., "bankrate.com")
+            
+        Returns:
+            Dictionary with file paths
+        """
+        domain_dir = os.path.join(self.data_dir, domain)
+        os.makedirs(domain_dir, exist_ok=True)
         
         return {
-            'parquet': f"{base_path}.parquet",
-            'csv': f"{base_path}.csv",
-            'json': f"{base_path}.json",
-            'log': os.path.join(self.data_dir, f"{domain}_processing.log"),
-            'change_log_csv': os.path.join(self.data_dir, f"{domain}_changes_history.csv")
+            "snapshot_csv": os.path.join(domain_dir, f"{domain}_urls.csv"),
+            "all_time_csv": os.path.join(domain_dir, f"{domain}_urls_all_time.csv"),
+            "sitemaps_csv": os.path.join(domain_dir, f"{domain}_sitemaps.csv"),
+            "domain_dir": domain_dir,
         }
-    
+
+    def _get_monthly_change_log_path(self, domain: str, run_ts: datetime) -> str:
+        """
+        3.2 Get the path for the monthly change log file.
+        """
+        month_str = run_ts.strftime("%Y-%m")
+        domain_dir = os.path.join(self.data_dir, domain)
+        os.makedirs(domain_dir, exist_ok=True)
+        return os.path.join(domain_dir, f"{domain}_changes_{month_str}.csv")
+
+    def _has_existing_change_log(self, domain: str) -> bool:
+        """
+        3.3 Check if any historical change log exists for this domain.
+        """
+        domain_dir = os.path.join(self.data_dir, domain)
+        
+        # Check legacy formats
+        legacy_patterns = [
+            os.path.join(self.data_dir, f"{domain}_changes_history.csv"),
+            os.path.join(domain_dir, f"{domain}_changes_history.csv"),
+        ]
+        for path in legacy_patterns:
+            if os.path.exists(path):
+                return True
+        
+        # Check for any monthly files
+        monthly_pattern = os.path.join(domain_dir, f"{domain}_changes_*.csv")
+        if glob(monthly_pattern):
+            return True
+        
+        return False
+
+    def _load_snapshot(self, snapshot_path: str) -> pd.DataFrame:
+        """
+        3.4 Load existing snapshot from CSV (or legacy Parquet) with validation.
+        
+        Validates:
+        - Required columns exist
+        - No duplicate URLs
+        - No null values in key columns
+        """
+        df = pd.DataFrame()
+        
+        # Try CSV first
+        if os.path.exists(snapshot_path):
+            try:
+                df = pd.read_csv(snapshot_path)
+            except Exception as e:
+                logger.warning(f"Could not load CSV snapshot: {e}")
+        
+        # Try legacy Parquet if CSV not found
+        if df.empty:
+            parquet_path = snapshot_path.replace('.csv', '.parquet')
+            if os.path.exists(parquet_path):
+                try:
+                    df = pd.read_parquet(parquet_path)
+                    logger.info(f"Migrated from legacy Parquet: {parquet_path}")
+                except Exception as e:
+                    logger.warning(f"Could not load Parquet snapshot: {e}")
+        
+        # 🆕 VALIDATION: Skip if empty
+        if df.empty:
+            return df
+        
+        # 🆕 VALIDATION: Log DataFrame info
+        logger.info(
+            f"Loaded snapshot: {len(df):,} rows, {df.shape[1]} columns, "
+            f"memory: {df.memory_usage(deep=True).sum() / 1024:.1f} KB"
+        )
+        
+        # 🆕 VALIDATION: Check required columns
+        required_cols = ['loc']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            logger.warning(f"Snapshot missing required columns: {missing_cols}")
+        
+        # 🆕 VALIDATION: Check for duplicates
+        if 'loc' in df.columns:
+            dup_count = df.duplicated(subset=['loc']).sum()
+            if dup_count > 0:
+                logger.warning(f"Snapshot has {dup_count:,} duplicate URLs - will dedupe")
+                df = df.drop_duplicates(subset=['loc'], keep='first')
+        
+        # 🆕 VALIDATION: Check for null values in key column
+        if 'loc' in df.columns:
+            null_count = df['loc'].isna().sum()
+            if null_count > 0:
+                logger.warning(f"Snapshot has {null_count:,} null 'loc' values - will filter")
+                df = df.dropna(subset=['loc'])
+        
+        # 🆕 VALIDATION: Log data quality summary
+        if 'lastmod' in df.columns:
+            lastmod_null_pct = df['lastmod'].isna().sum() / len(df) * 100
+            if lastmod_null_pct > 50:
+                logger.info(f"Note: {lastmod_null_pct:.0f}% of URLs have no lastmod")
+        
+        return df
+
+    # =========================================================================
+    # 4.0 DATA SAVING METHODS
+    # =========================================================================
+
     def _save_change_log(self, changes_df: pd.DataFrame, change_log_path: str) -> None:
-        """Appends detected changes to a CSV log file."""
+        """
+        4.1 Append detected changes to a monthly CSV log file.
+        
+        Uses vectorized column operations instead of loops for better performance.
+        Handles schema migrations when new columns are added.
+        """
         if changes_df.empty:
             return
 
         try:
-            # Define column order for the change log, excluding priority and changefreq
+            # Define expected columns (canonical schema)
+            # Includes first_seen_at and last_seen_at for URL lifecycle tracking
             change_log_columns = [
-                'detected_at', 'domain', 'loc', 'change_type', 
-                'lastmod', 'lastmod_prev', 'sitemap_source_url'
+                'detected_at', 'domain', 'loc', 'change_type',
+                'first_seen_at', 'last_seen_at',
+                'lastmod', 'lastmod_prev', 'sitemap_source_url',
+                'section', 'subsection', 'path_depth'
             ]
-            
-            final_changes_df = pd.DataFrame(columns=change_log_columns)
-            for col in change_log_columns:
-                if col in changes_df.columns:
-                    final_changes_df[col] = changes_df[col]
-                else:
-                    final_changes_df[col] = None
-            
+
+            # Reindex to ensure all columns exist in correct order
+            final_df = changes_df.reindex(columns=change_log_columns)
+
+            os.makedirs(os.path.dirname(change_log_path), exist_ok=True)
+
             if os.path.exists(change_log_path):
-                final_changes_df.to_csv(change_log_path, mode='a', header=False, index=False)
-                logger.info(f"Appended {len(final_changes_df)} changes to {change_log_path}")
+                # Check if existing file has matching schema
+                try:
+                    existing_df = pd.read_csv(change_log_path, nrows=0)
+                    existing_cols = list(existing_df.columns)
+                    
+                    if existing_cols != change_log_columns:
+                        # Schema mismatch - migrate existing data to new schema
+                        logger.info(f"Migrating {change_log_path} to new schema (adding first_seen_at, last_seen_at)")
+                        existing_df = pd.read_csv(change_log_path, low_memory=False)
+                        existing_df = existing_df.reindex(columns=change_log_columns)
+                        combined_df = pd.concat([existing_df, final_df], ignore_index=True)
+                        combined_df.to_csv(change_log_path, mode='w', header=True, index=False)
+                        logger.info(f"Migrated and appended {len(final_df):,} changes to {change_log_path}")
+                    else:
+                        # Schema matches - simple append
+                        final_df.to_csv(change_log_path, mode='a', header=False, index=False)
+                        logger.info(f"Appended {len(final_df):,} changes to {change_log_path}")
+                except Exception as read_err:
+                    logger.warning(f"Could not read existing file for schema check: {read_err}")
+                    final_df.to_csv(change_log_path, mode='a', header=False, index=False)
             else:
-                final_changes_df.to_csv(change_log_path, mode='w', header=True, index=False)
-                logger.info(f"Created new change log with {len(final_changes_df)} changes at {change_log_path}")
+                final_df.to_csv(change_log_path, mode='w', header=True, index=False)
+                logger.info(f"Created change log with {len(final_df):,} changes at {change_log_path}")
+                
         except Exception as e:
-            logger.error(f"Error saving change log to {change_log_path}: {e}")
-    
+            logger.error(f"Error saving change log: {e}")
+
+    def _save_snapshot(self, df: pd.DataFrame, csv_path: str) -> None:
+        """
+        4.2 Save snapshot as CSV only.
+        """
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        df.to_csv(csv_path, index=False)
+        logger.debug(f"Saved snapshot to {csv_path}")
+
+    def save_sitemap_metadata(self, domain: str, sitemap_records: List[Dict[str, Any]]) -> None:
+        """
+        4.3 Save sitemap file metadata to CSV.
+        
+        Tracks each sitemap file with:
+        - sitemap_url, domain, sitemap_type
+        - url_count, content_hash, content_length
+        - fetched_at
+        """
+        if not sitemap_records:
+            return
+        
+        file_paths = self._get_file_paths(domain)
+        sitemaps_path = file_paths["sitemaps_csv"]
+        
+        df = pd.DataFrame(sitemap_records)
+        
+        # Reorder columns for readability
+        column_order = [
+            'sitemap_url', 'domain', 'sitemap_type', 'url_count',
+            'content_hash', 'content_length', 'fetched_at'
+        ]
+        for col in column_order:
+            if col not in df.columns:
+                df[col] = None
+        df = df[[c for c in column_order if c in df.columns]]
+        
+        df.to_csv(sitemaps_path, index=False)
+        logger.info(f"Saved {len(df)} sitemap records to {sitemaps_path}")
+
+    # =========================================================================
+    # 5.0 ALL-TIME URL TRACKING
+    # =========================================================================
+
+    def _update_all_time_live(self, domain: str, current_snapshot_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        5.1 Maintain an 'all time' list of URLs for a domain.
+        """
+        file_paths = self._get_file_paths(domain)
+        all_time_path = file_paths["all_time_csv"]
+        now = datetime.now(timezone.utc)
+
+        # Normalize current snapshot
+        cur = current_snapshot_df.copy() if not current_snapshot_df.empty else pd.DataFrame()
+        
+        if cur.empty:
+            cur = pd.DataFrame(columns=["loc", "lastmod", "sitemap_source_url", "domain", "section"])
+        
+        if "domain" not in cur.columns:
+            cur["domain"] = domain
+
+        # Keep relevant columns
+        keep_cols = ["loc", "domain", "lastmod", "sitemap_source_url", "section", "subsection", "path_depth"]
+        available_cols = [c for c in keep_cols if c in cur.columns]
+        cur = cur[available_cols].dropna(subset=["loc"])
+        cur = cur.drop_duplicates(subset=["loc"], keep="first")
+
+        # Load existing all-time file
+        all_time_columns = [
+            "loc", "domain", "first_seen_at", "last_seen_at",
+            "is_current_live", "live_status", "last_lastmod", 
+            "last_sitemap_source_url", "section", "subsection", "path_depth"
+        ]
+        
+        if os.path.exists(all_time_path):
+            try:
+                all_time = pd.read_csv(all_time_path)
+            except Exception as e:
+                logger.warning(f"Could not load all-time file: {e}")
+                all_time = pd.DataFrame(columns=all_time_columns)
+        else:
+            all_time = pd.DataFrame(columns=all_time_columns)
+
+        # Ensure columns exist
+        for col in all_time_columns:
+            if col not in all_time.columns:
+                all_time[col] = None
+
+        # Index by loc
+        if not all_time.empty:
+            all_time = all_time.set_index("loc", drop=False)
+        if not cur.empty:
+            cur = cur.set_index("loc", drop=False)
+
+        # Mark all as not current first
+        if not all_time.empty:
+            all_time["is_current_live"] = False
+
+        # Update existing URLs
+        if not all_time.empty and not cur.empty:
+            shared = all_time.index.intersection(cur.index)
+            if len(shared) > 0:
+                all_time.loc[shared, "is_current_live"] = True
+                all_time.loc[shared, "last_seen_at"] = now
+                all_time.loc[shared, "last_lastmod"] = cur.loc[shared, "lastmod"]
+                if "sitemap_source_url" in cur.columns:
+                    all_time.loc[shared, "last_sitemap_source_url"] = cur.loc[shared, "sitemap_source_url"]
+                if "section" in cur.columns:
+                    all_time.loc[shared, "section"] = cur.loc[shared, "section"]
+                if "subsection" in cur.columns:
+                    all_time.loc[shared, "subsection"] = cur.loc[shared, "subsection"]
+                if "path_depth" in cur.columns:
+                    all_time.loc[shared, "path_depth"] = cur.loc[shared, "path_depth"]
+
+        # Add new URLs
+        if not cur.empty:
+            new_locs = cur.index.difference(all_time.index) if not all_time.empty else cur.index
+            
+            if len(new_locs) > 0:
+                new_rows_data = {
+                    "loc": cur.loc[new_locs, "loc"],
+                    "domain": cur.loc[new_locs, "domain"],
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "is_current_live": True,
+                    "last_lastmod": cur.loc[new_locs, "lastmod"] if "lastmod" in cur.columns else None,
+                }
+                if "sitemap_source_url" in cur.columns:
+                    new_rows_data["last_sitemap_source_url"] = cur.loc[new_locs, "sitemap_source_url"]
+                if "section" in cur.columns:
+                    new_rows_data["section"] = cur.loc[new_locs, "section"]
+                if "subsection" in cur.columns:
+                    new_rows_data["subsection"] = cur.loc[new_locs, "subsection"]
+                if "path_depth" in cur.columns:
+                    new_rows_data["path_depth"] = cur.loc[new_locs, "path_depth"]
+                
+                new_rows = pd.DataFrame(new_rows_data, index=new_locs)
+                all_time = pd.concat([all_time, new_rows], axis=0)
+
+        # Derive live_status
+        if not all_time.empty:
+            all_time["live_status"] = all_time["is_current_live"].apply(
+                lambda v: "current_live" if bool(v) else "old_live"
+            )
+
+        # Save - reset index first to avoid ambiguity (loc is both index and column)
+        all_time = all_time.reset_index(drop=True)
+        all_time = all_time.sort_values(["domain", "loc"]).reset_index(drop=True)
+        
+        try:
+            all_time.to_csv(all_time_path, index=False)
+            
+            # Summary stats
+            current_count = len(all_time[all_time["is_current_live"] == True])
+            old_count = len(all_time[all_time["is_current_live"] == False])
+            logger.info(f"All-time for {domain}: {len(all_time)} total ({current_count} live, {old_count} old)")
+        except Exception as e:
+            logger.error(f"Error saving all-time file: {e}")
+
+        return all_time
+
+    # =========================================================================
+    # 6.0 MAIN PROCESSING METHOD
+    # =========================================================================
+
     def process_sitemap_urls(self, domain: str, sitemap_urls: List[Dict[str, Any]]) -> pd.DataFrame:
         """
-        Process and store sitemap URLs for a specific domain, tracking changes.
-        Saves a snapshot of the current state and appends changes to a historical log.
-        If the historical log doesn't exist, it's seeded with the current snapshot data.
-        Only 'loc' and 'lastmod' (and sitemap_source_url) are processed and stored.
+        6.1 Process sitemap URLs for a domain, tracking changes.
         """
-        logger.info(f"Processing {len(sitemap_urls)} URLs for domain: {domain} (priority/changefreq excluded)")
+        logger.info(f"Processing {len(sitemap_urls)} URLs for domain: {domain}")
+        
         file_paths = self._get_file_paths(domain)
         current_dt = datetime.now(timezone.utc)
 
-        # Define canonical columns for the main snapshot data, excluding priority and changefreq
+        # Snapshot columns (including section analysis)
         snapshot_columns = [
-            'loc', 'domain', 'lastmod', 'detected_at', 'change_type', 'sitemap_source_url'
+            'loc', 'domain', 'lastmod', 'detected_at', 'change_type', 
+            'sitemap_source_url', 'section', 'subsection', 'path_depth'
         ]
-        change_log_csv_path = file_paths['change_log_csv']
-        parquet_file_path = file_paths['parquet']
 
-        existing_snapshot_df = pd.DataFrame()
-        if os.path.exists(parquet_file_path):
+        change_log_path = self._get_monthly_change_log_path(domain, current_dt)
+        snapshot_path = file_paths['snapshot_csv']
+
+        # Load existing snapshot
+        existing_df = self._load_snapshot(snapshot_path)
+        if not existing_df.empty:
+            for col in ['loc', 'lastmod', 'sitemap_source_url', 'change_type', 'section']:
+                if col not in existing_df.columns:
+                    existing_df[col] = None
+            logger.info(f"Loaded existing snapshot: {len(existing_df)} URLs")
+        
+        # Load all-time data to get first_seen_at for existing URLs
+        all_time_path = file_paths['all_time_csv']
+        all_time_lookup = {}
+        if os.path.exists(all_time_path):
             try:
-                existing_snapshot_df = pd.read_parquet(parquet_file_path)
-                # Ensure essential columns exist for consistent processing
-                # We don't care about priority/changefreq from old files anymore
-                required_cols_for_snapshot_load = ['loc', 'lastmod', 'sitemap_source_url', 'domain', 'detected_at', 'change_type']
-                for col in required_cols_for_snapshot_load:
-                    if col not in existing_snapshot_df.columns:
-                        existing_snapshot_df[col] = None
-                logger.info(f"Loaded existing snapshot with {len(existing_snapshot_df)} URLs from {parquet_file_path}.")
+                all_time_df = pd.read_csv(all_time_path)
+                if 'loc' in all_time_df.columns and 'first_seen_at' in all_time_df.columns:
+                    all_time_lookup = dict(zip(all_time_df['loc'], all_time_df['first_seen_at']))
+                    logger.debug(f"Loaded {len(all_time_lookup)} URLs from all-time for first_seen lookup")
             except Exception as e:
-                logger.warning(f"Could not load existing snapshot from {parquet_file_path}: {e}. Proceeding as if no previous snapshot.")
+                logger.warning(f"Could not load all-time for lookup: {e}")
 
-        if not os.path.exists(change_log_csv_path):
-            logger.info(f"Historical change log {change_log_csv_path} not found.")
-            if not existing_snapshot_df.empty:
-                logger.info(f"Backfilling historical log with {len(existing_snapshot_df)} URLs from snapshot, marking them 'new'.")
-                backfill_changes_records = []
-                for _, row in existing_snapshot_df.iterrows():
-                    loc_val = row.get('loc')
-                    if pd.isna(loc_val): continue
-                    backfill_changes_records.append({
-                        'detected_at': current_dt,
-                        'domain': row.get('domain', domain),
-                        'loc': loc_val,
-                        'change_type': 'new',
-                        'lastmod': row.get('lastmod'),
-                        'lastmod_prev': None,
-                        'sitemap_source_url': row.get('sitemap_source_url')
-                        # priority and changefreq intentionally omitted
-                    })
-                if backfill_changes_records:
-                    self._save_change_log(pd.DataFrame(backfill_changes_records), change_log_csv_path)
-            else:
-                logger.info("No existing snapshot to backfill historical log. Log will start from current fetch.")
-
-        # Process live sitemap URLs, focusing only on loc, lastmod, sitemap_source_url
-        processed_live_urls = []
-        if sitemap_urls:
-            for item in sitemap_urls:
-                if item and isinstance(item, dict) and item.get('loc'):
-                    processed_live_urls.append({
-                        'loc': item.get('loc'),
-                        'lastmod': item.get('lastmod'),
-                        'sitemap_source_url': item.get('sitemap_source_url') # Keep if provided by parser
-                    })
-        
-        current_sitemap_live_df = pd.DataFrame(processed_live_urls)
-        if current_sitemap_live_df.empty:
-             logger.info(f"No valid URLs (with loc) in current live sitemap fetch for {domain}.")
-             # Ensure schema if empty
-             current_sitemap_live_df = pd.DataFrame(columns=['loc', 'lastmod', 'sitemap_source_url'])
-        
-        current_sitemap_live_df['domain'] = domain
-
-        if not current_sitemap_live_df.empty and 'loc' in current_sitemap_live_df.columns:
-            num_before_dedupe = len(current_sitemap_live_df)
-            if 'lastmod' in current_sitemap_live_df.columns:
-                current_sitemap_live_df['lastmod_dt'] = pd.to_datetime(current_sitemap_live_df['lastmod'], errors='coerce')
-                current_sitemap_live_df = current_sitemap_live_df.sort_values(
-                    by=['loc', 'lastmod_dt'], 
-                    ascending=[True, False],
-                    na_position='last'
-                )
-                current_sitemap_live_df = current_sitemap_live_df.drop(columns=['lastmod_dt'])
-            else:
-                current_sitemap_live_df = current_sitemap_live_df.sort_values(by=['loc'], ascending=[True])
+        # One-time backfill check
+        if not self._has_existing_change_log(domain) and not existing_df.empty:
+            logger.info(f"Backfilling change log with {len(existing_df):,} existing URLs")
             
-            current_sitemap_live_df = current_sitemap_live_df.drop_duplicates(subset=['loc'], keep='first')
-            num_after_dedupe = len(current_sitemap_live_df)
-            if num_before_dedupe > num_after_dedupe:
-                logger.info(f"Deduplicated live sitemap URLs by 'loc': {num_before_dedupe} before, {num_after_dedupe} after for domain {domain}.")
+            # 🆕 VECTORIZED: Build backfill DataFrame without iterrows()
+            # Filter out null locs first
+            backfill_df = existing_df.dropna(subset=['loc']).copy()
+            
+            if not backfill_df.empty:
+                # Add/set columns in bulk (vectorized)
+                backfill_df['detected_at'] = current_dt
+                backfill_df['domain'] = domain
+                backfill_df['change_type'] = 'discovered'
+                backfill_df['lastmod_prev'] = None
+                
+                # Ensure all expected columns exist
+                for col in ['sitemap_source_url', 'section', 'subsection', 'path_depth']:
+                    if col not in backfill_df.columns:
+                        backfill_df[col] = None
+                
+                self._save_change_log(backfill_df, change_log_path)
 
-        current_run_changes_records = []
-        output_df_rows = []
+        # Process current sitemap URLs
+        processed_urls = []
+        for item in sitemap_urls or []:
+            if item and isinstance(item, dict) and item.get('loc'):
+                processed_urls.append({
+                    'loc': item.get('loc'),
+                    'lastmod': item.get('lastmod'),
+                    'sitemap_source_url': item.get('sitemap_source_url'),
+                    'section': item.get('section'),
+                    'subsection': item.get('subsection'),
+                    'path_depth': item.get('path_depth'),
+                })
 
-        if existing_snapshot_df.empty:
-            logger.info(f"No existing snapshot for comparison. All {len(current_sitemap_live_df)} live URLs are 'new' for this run.")
-            for _, row in current_sitemap_live_df.iterrows():
-                loc_val = row.get('loc')
-                if pd.isna(loc_val): continue
-                current_run_changes_records.append({
-                    'detected_at': current_dt, 'domain': domain, 'loc': loc_val, 'change_type': 'new',
-                    'lastmod': row.get('lastmod'), 'lastmod_prev': None,
-                    'sitemap_source_url': row.get('sitemap_source_url')
-                    # priority and changefreq intentionally omitted
-                })
-                output_df_rows.append({
-                    'loc': loc_val, 'domain': domain, 'lastmod': row.get('lastmod'), 
-                    'detected_at': current_dt, 'change_type': 'new', 
-                    'sitemap_source_url': row.get('sitemap_source_url')
-                    # priority and changefreq intentionally omitted
-                })
+        current_df = pd.DataFrame(processed_urls)
+        if current_df.empty:
+            current_df = pd.DataFrame(columns=['loc', 'lastmod', 'sitemap_source_url', 'section'])
+        current_df['domain'] = domain
+
+        # Deduplicate
+        if not current_df.empty and 'loc' in current_df.columns:
+            before = len(current_df)
+            if 'lastmod' in current_df.columns:
+                # Use utc=True to handle mixed timezone formats consistently
+                current_df['lastmod_dt'] = pd.to_datetime(current_df['lastmod'], errors='coerce', utc=True)
+                current_df = current_df.sort_values(['loc', 'lastmod_dt'], ascending=[True, False])
+                current_df = current_df.drop(columns=['lastmod_dt'])
+            current_df = current_df.drop_duplicates(subset=['loc'], keep='first')
+            if before > len(current_df):
+                logger.info(f"Deduplicated: {before} -> {len(current_df)}")
+
+        # Change detection
+        changes = []
+        output_rows = []
+
+        if existing_df.empty:
+            # First run - all new
+            # 🆕 VECTORIZED: Build DataFrames without iterrows()
+            logger.info(f"First run: {len(current_df):,} new URLs")
+            
+            # Filter out null locs
+            valid_df = current_df.dropna(subset=['loc']).copy()
+            
+            if not valid_df.empty:
+                # Build changes DataFrame (vectorized)
+                changes_df = valid_df.copy()
+                changes_df['detected_at'] = current_dt
+                changes_df['domain'] = domain
+                changes_df['change_type'] = 'discovered'
+                changes_df['lastmod_prev'] = None
+                
+                # Build output DataFrame (vectorized)  
+                output_df_new = valid_df.copy()
+                output_df_new['detected_at'] = current_dt
+                output_df_new['domain'] = domain
+                output_df_new['change_type'] = 'discovered'
+                
+                # Convert to list of dicts for compatibility with existing code
+                changes = changes_df.to_dict('records')
+                output_rows = output_df_new.to_dict('records')
         else:
-            prev_rename_map = {
-                'lastmod': 'lastmod_prev', 
-                'sitemap_source_url': 'sitemap_source_url_prev'
-                # No priority/changefreq in rename map
+            # Merge and compare
+            rename_map = {
+                'lastmod': 'lastmod_prev',
+                'sitemap_source_url': 'sitemap_source_url_prev',
+                'change_type': 'change_type_prev',
             }
-            # Only select loc, lastmod, sitemap_source_url from existing snapshot for merge comparison
-            prev_cols_for_merge = ['loc']
-            if 'lastmod' in existing_snapshot_df.columns: prev_cols_for_merge.append('lastmod')
-            if 'sitemap_source_url' in existing_snapshot_df.columns: prev_cols_for_merge.append('sitemap_source_url')
             
-            # Ensure 'loc' is in current_sitemap_live_df before merge
-            if 'loc' not in current_sitemap_live_df.columns:
-                 current_sitemap_live_df['loc'] = None 
-
-            merged_df = current_sitemap_live_df.merge(
-                existing_snapshot_df[list(set(prev_cols_for_merge))].rename(columns=prev_rename_map), # Use set to ensure unique cols
+            merge_cols = ['loc']
+            for col in ['lastmod', 'sitemap_source_url', 'change_type']:
+                if col in existing_df.columns:
+                    merge_cols.append(col)
+            
+            merged = current_df.merge(
+                existing_df[list(set(merge_cols))].rename(columns=rename_map),
                 on='loc',
                 how='outer',
                 indicator=True
             )
 
-            for _, row in merged_df.iterrows():
+            for _, row in merged.iterrows():
                 loc = row.get('loc')
-                if pd.isna(loc): continue
+                if pd.isna(loc):
+                    continue
 
-                current_lastmod = row.get('lastmod')
-                current_sitemap_source = row.get('sitemap_source_url')
-
+                cur_lastmod = row.get('lastmod')
+                cur_source = row.get('sitemap_source_url')
                 prev_lastmod = row.get('lastmod_prev')
-                prev_sitemap_source = row.get('sitemap_source_url_prev')
-                
-                sitemap_source_for_log = current_sitemap_source if pd.notna(current_sitemap_source) else prev_sitemap_source
+                prev_source = row.get('sitemap_source_url_prev')
+                prev_change_type = row.get('change_type_prev')
 
-                change_data_base = {'detected_at': current_dt, 'domain': domain, 'loc': loc, 'sitemap_source_url': sitemap_source_for_log}
-                snapshot_data_base = {'loc': loc, 'domain': domain, 'detected_at': current_dt, 'sitemap_source_url': current_sitemap_source}
+                source_for_log = cur_source if pd.notna(cur_source) else prev_source
+
+                # Get first_seen_at from all-time lookup (or current time for new URLs)
+                first_seen = all_time_lookup.get(loc, current_dt)
+                
+                base = {
+                    'detected_at': current_dt,
+                    'domain': domain,
+                    'loc': loc,
+                    'first_seen_at': first_seen,
+                    'last_seen_at': current_dt,
+                    'sitemap_source_url': source_for_log,
+                    'section': row.get('section'),
+                    'subsection': row.get('subsection'),
+                    'path_depth': row.get('path_depth'),
+                }
 
                 if row['_merge'] == 'left_only':
-                    change_type = 'new'
-                    current_run_changes_records.append({
-                        **change_data_base, 'change_type': change_type, 
-                        'lastmod': current_lastmod, 'lastmod_prev': None
-                    })
-                    output_df_rows.append({
-                        **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
-                    })
+                    # New URL - first_seen = last_seen = now
+                    base['first_seen_at'] = current_dt
+                    changes.append({**base, 'change_type': 'discovered', 'lastmod': cur_lastmod, 'lastmod_prev': None})
+                    output_rows.append({**base, 'change_type': 'discovered', 'lastmod': cur_lastmod})
+
                 elif row['_merge'] == 'right_only':
-                    change_type = 'removed'
-                    current_run_changes_records.append({
-                        **change_data_base, 'change_type': change_type, 
-                        'lastmod': None, 'lastmod_prev': prev_lastmod
-                    })
-                    output_df_rows.append({
-                        'loc': loc, 'domain': domain, 'lastmod': prev_lastmod,
-                        'detected_at': current_dt, 'change_type': change_type, 
-                        'sitemap_source_url': prev_sitemap_source
-                    })
+                    # Removed - only log once, last_seen_at = now (when we noticed removal)
+                    if prev_change_type != 'removed':
+                        changes.append({**base, 'change_type': 'removed', 'lastmod': None, 'lastmod_prev': prev_lastmod})
+                    # Don't add to output (removed URLs not in snapshot)
+
                 elif row['_merge'] == 'both':
-                    updated = False
-                    # Update status is now SOLELY based on lastmod
-                    if current_lastmod != prev_lastmod and not (pd.isna(current_lastmod) and pd.isna(prev_lastmod)):
-                        updated = True
+                    # Check for update
+                    updated = cur_lastmod != prev_lastmod and not (pd.isna(cur_lastmod) and pd.isna(prev_lastmod))
                     
                     if updated:
-                        change_type = 'updated'
-                        current_run_changes_records.append({
-                            **change_data_base, 'change_type': change_type,
-                            'lastmod': current_lastmod, 'lastmod_prev': prev_lastmod
-                        })
-                        output_df_rows.append({
-                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
-                        })
+                        changes.append({**base, 'change_type': 'modified', 'lastmod': cur_lastmod, 'lastmod_prev': prev_lastmod})
+                        output_rows.append({**base, 'change_type': 'modified', 'lastmod': cur_lastmod})
                     else:
-                        change_type = 'unchanged'
-                        output_df_rows.append({
-                            **snapshot_data_base, 'change_type': change_type, 'lastmod': current_lastmod
-                        })
-        
+                        output_rows.append({**base, 'change_type': 'present', 'lastmod': cur_lastmod})
+
+        # Build output DataFrame
         output_df = pd.DataFrame(columns=snapshot_columns)
-        if output_df_rows:
-            temp_output_df = pd.DataFrame(output_df_rows)
+        if output_rows:
+            temp_df = pd.DataFrame(output_rows)
             for col in snapshot_columns:
-                if col in temp_output_df.columns:
-                    output_df[col] = temp_output_df[col]
+                if col in temp_df.columns:
+                    output_df[col] = temp_df[col]
 
-        num_new_this_run = len([r for r in current_run_changes_records if r.get('change_type') == 'new'])
-        num_updated_this_run = len([r for r in current_run_changes_records if r.get('change_type') == 'updated'])
-        num_removed_this_run = len([r for r in current_run_changes_records if r.get('change_type') == 'removed'])
-        logger.info(f"Changes in current run (live vs snapshot): {num_new_this_run} new, {num_updated_this_run} updated, {num_removed_this_run} removed.")
+        # Stats
+        discovered_count = len([c for c in changes if c.get('change_type') == 'discovered'])
+        modified_count = len([c for c in changes if c.get('change_type') == 'modified'])
+        removed_count = len([c for c in changes if c.get('change_type') == 'removed'])
+        logger.info(f"Changes: {discovered_count} discovered, {modified_count} modified, {removed_count} removed")
 
-        if current_run_changes_records:
-            changes_df_current_run = pd.DataFrame(current_run_changes_records)
-            self._save_change_log(changes_df_current_run, change_log_csv_path)
-        else:
-            logger.info(f"No changes from current run to append to historical log {change_log_csv_path}.")
+        # Section summary
+        if not output_df.empty and 'section' in output_df.columns:
+            section_counts = output_df['section'].value_counts().head(5)
+            logger.info(f"Top sections: {section_counts.to_dict()}")
 
+        # Save change log
+        if changes:
+            self._save_change_log(pd.DataFrame(changes), change_log_path)
+
+        # Save snapshot
         if not output_df.empty:
-            self._save_data(output_df, file_paths['parquet'], file_paths['csv'], file_paths['json'])
-            logger.info(f"Saved new snapshot with {len(output_df)} URLs for {domain}.")
-        elif os.path.exists(parquet_file_path) or os.path.exists(file_paths['csv']) or os.path.exists(file_paths['json']):
-            empty_snapshot_df = pd.DataFrame(columns=snapshot_columns)
-            self._save_data(empty_snapshot_df, file_paths['parquet'], file_paths['csv'], file_paths['json'])
-            logger.info(f"Saved empty snapshot for {domain} (previous files overwritten).")
-        else:
-            logger.info(f"No data for snapshot for {domain}; no previous files existed.")
-            
+            self._save_snapshot(output_df, snapshot_path)
+            logger.info(f"Saved snapshot: {len(output_df)} URLs")
+
+        # Update all-time list
+        self._update_all_time_live(domain, output_df)
+
         return output_df
-    
-    def _save_data(self, df: pd.DataFrame, parquet_path: str, csv_path: str, json_path: str) -> None:
-        """Save the DataFrame in multiple formats (snapshot - overwrites)."""
-        os.makedirs(os.path.dirname(parquet_path), exist_ok=True)
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-        os.makedirs(os.path.dirname(json_path), exist_ok=True)
-
-        df.to_parquet(parquet_path, index=False)
-        df.to_csv(csv_path, index=False)
-        df.to_json(json_path, orient='records', lines=True)
-        logger.debug(f"Saved data to {parquet_path}, {csv_path}, and {json_path}")
-
-# Removed Example Usage section 

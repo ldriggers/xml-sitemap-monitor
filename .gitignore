@@ -126,4 +126,20 @@ venv.bak/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# ==============================================================================
+# PROJECT-SPECIFIC EXCLUSIONS
+# ==============================================================================
+
+# Runtime state files (recreated on each run)
+stealth_strategy_history.json
+*_status_check_state.json
+
+# Legacy data files at root (migrated to per-domain folders)
+data/*.csv
+data/*.json
+data/*.parquet
+
+# Headers JSONL files (too large, raw data)
+*_headers_*.jsonl 

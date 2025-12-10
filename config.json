@@ -2,12 +2,69 @@
   "targets": [
     {
       "domain": "bankrate.com",
-      "sitemap_url": "https://www.bankrate.com/sitemap/sitemap-index.xml"
+      "sitemap_url": "https://www.bankrate.com/sitemap/sitemap-index.xml",
+      "download_delay": 1.5,
+      "status_check": {
+        "enabled": true,
+        "check_new": true,
+        "check_updated": true,
+        "check_removed": true,
+        "max_per_run": 100,
+        "failure_threshold": 0.5,
+        "backoff_days": 3,
+        "timeout": 5
+      }
     },
     {
       "domain": "nerdwallet.com",
-      "sitemap_url": "https://www.nerdwallet.com/blog/wp-sitemap.xml"
+      "sitemap_url": "https://www.nerdwallet.com/blog/wp-sitemap.xml",
+      "download_delay": 2.0,
+      "status_check": {
+        "enabled": true,
+        "check_new": false,
+        "check_updated": false,
+        "check_removed": true,
+        "max_per_run": 25,
+        "failure_threshold": 0.3,
+        "backoff_days": 7,
+        "timeout": 3
+      }
+    },
+    {
+      "domain": "investopedia.com",
+      "sitemap_url": "https://www.investopedia.com/sitemap.xml",
+      "download_delay": 2.0,
+      "status_check": {
+        "enabled": true,
+        "check_new": true,
+        "check_updated": true,
+        "check_removed": true,
+        "max_per_run": 100,
+        "failure_threshold": 0.5,
+        "backoff_days": 3,
+        "timeout": 5
+      }
+    },
+    {
+      "domain": "rocketmortgage.com",
+      "sitemap_url": "https://www.rocketmortgage.com/sitemap.xml",
+      "download_delay": 2.0,
+      "status_check": {
+        "enabled": true,
+        "check_new": true,
+        "check_updated": true,
+        "check_removed": true,
+        "max_per_run": 100,
+        "failure_threshold": 0.5,
+        "backoff_days": 3,
+        "timeout": 5
+      }
     }
   ],
-  "user_agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot"
-} 
+  "user_agent": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot",
+  "data_directory": "data",
+  "stealth": {
+    "enabled": false,
+    "max_startup_jitter_seconds": 0
+  }
+}

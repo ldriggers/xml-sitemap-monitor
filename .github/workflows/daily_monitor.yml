@@ -2,19 +2,9 @@ name: Daily Sitemap Check
 
 on:
   schedule:
-    # Staggered cron times to appear less predictable (Pacific-friendly windows)
-    # Primary: 66% - Early morning Pacific (midnight-5am PT = 8-13 UTC)
-    - cron: '17 8 * * *'   # ~12:17 AM PT
-    - cron: '43 9 * * *'   # ~1:43 AM PT
-    - cron: '28 10 * * *'  # ~2:28 AM PT
-    - cron: '52 11 * * *'  # ~3:52 AM PT
-    - cron: '11 12 * * *'  # ~4:11 AM PT
-    # Secondary: 22% - Morning Pacific (5am-noon PT = 13-20 UTC)  
-    - cron: '34 14 * * 1'  # ~6:34 AM PT (Mondays)
-    - cron: '19 17 * * 4'  # ~9:19 AM PT (Thursdays)
-    # Tertiary: 12% - Afternoon Pacific (noon-midnight PT = 20-8 UTC)
-    - cron: '47 22 * * 3'  # ~2:47 PM PT (Wednesdays)
-  workflow_dispatch:  # Allow manual triggering
+    # Single daily trigger - random jitter makes actual run time vary day-to-day
+    - cron: '0 8 * * *'  # Midnight PT - but jitter adds 0-6 hours
+  workflow_dispatch:  # Manual trigger (no jitter)
 
 jobs:
   run-sitemap-check:
@@ -23,10 +13,15 @@ jobs:
       contents: write
     
     steps:
-      - name: Random startup jitter (0-15 min)
+      - name: Random startup jitter (0-5 hours for daily variance)
+        if: github.event_name == 'schedule'
         run: |
-          JITTER=$((RANDOM % 900))
-          echo "Waiting ${JITTER} seconds before starting..."
+          # Only add jitter for scheduled runs, not manual triggers
+          # Window: midnight - 4:59am PT (0-5 hours = 0-18000 seconds)
+          JITTER=$((RANDOM % 18000))
+          HOURS=$((JITTER / 3600))
+          MINS=$(((JITTER % 3600) / 60))
+          echo "Adding jitter: ${HOURS}h ${MINS}m (${JITTER}s total)"
           sleep $JITTER
       
       - name: Checkout repository
@@ -40,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -r requirements.txt
       
       - name: Run sitemap check
         run: python -m src.main

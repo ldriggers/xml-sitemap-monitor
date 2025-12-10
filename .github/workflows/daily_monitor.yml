@@ -2,22 +2,38 @@ name: Daily Sitemap Check
 
 on:
   schedule:
-    # Run at 2:00 AM UTC every day
-    - cron: '0 2 * * *'
+    # Staggered cron times to appear less predictable (Pacific-friendly windows)
+    # Primary: 66% - Early morning Pacific (midnight-5am PT = 8-13 UTC)
+    - cron: '17 8 * * *'   # ~12:17 AM PT
+    - cron: '43 9 * * *'   # ~1:43 AM PT
+    - cron: '28 10 * * *'  # ~2:28 AM PT
+    - cron: '52 11 * * *'  # ~3:52 AM PT
+    - cron: '11 12 * * *'  # ~4:11 AM PT
+    # Secondary: 22% - Morning Pacific (5am-noon PT = 13-20 UTC)  
+    - cron: '34 14 * * 1'  # ~6:34 AM PT (Mondays)
+    - cron: '19 17 * * 4'  # ~9:19 AM PT (Thursdays)
+    # Tertiary: 12% - Afternoon Pacific (noon-midnight PT = 20-8 UTC)
+    - cron: '47 22 * * 3'  # ~2:47 PM PT (Wednesdays)
   workflow_dispatch:  # Allow manual triggering
 
 jobs:
-  run-sitemap-check: # Changed from 'monitor_sitemaps' to 'run-sitemap-check' to match initial file.
+  run-sitemap-check:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     
     steps:
+      - name: Random startup jitter (0-15 min)
+        run: |
+          JITTER=$((RANDOM % 900))
+          echo "Waiting ${JITTER} seconds before starting..."
+          sleep $JITTER
+      
       - name: Checkout repository
-        uses: actions/checkout@v4 # Updated from v2
+        uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v5 # Updated from v2
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       
@@ -27,16 +43,15 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
       
       - name: Run sitemap check
-        run: python -m src.main # Changed from placeholder
+        run: python -m src.main
       
       - name: Commit and push if changed
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/ # Ensured it adds the whole data directory
-          # Check if there are any changes to commit
+          git add data/
           if ! git diff --staged --quiet; then
-            git commit -m "Update sitemap data [skip ci]" # Standardized commit message
+            git commit -m "Update sitemap data [skip ci]"
             git push
           else
             echo "No data changes to commit."

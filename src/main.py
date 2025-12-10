@@ -320,7 +320,9 @@ def main():
     # Get stealth/timing settings
     stealth_config = config.get("stealth", {})
 
-    # 5.3 Process each target domain
+    # 5.3 Process each target domain (fault-tolerant: one failure doesn't stop others)
+    domain_results = {}  # Track success/failure per domain
+    
     for target in config.get("targets", []):
         domain = target.get("domain")
         sitemap_url = target.get("sitemap_url")
@@ -333,60 +335,85 @@ def main():
         if not should_run_domain(target, config):
             continue
 
-        # 5.3.2 Skip jitter for Bankrate (own property) and when disabled
-        # Jitter only applies to competitor domains in automated runs
-        is_bankrate = any(bd in domain for bd in BANKRATE_DOMAINS)
-        jitter_enabled = stealth_config.get("enabled", False) and not is_bankrate
-        
-        if jitter_enabled:
-            jitter_seconds = calculate_startup_jitter(domain, stealth_config)
-            if jitter_seconds > 0:
-                logger.info(f"Startup jitter: {jitter_seconds}s for {domain}")
-                time.sleep(jitter_seconds)
+        # 5.3.2 Wrap domain processing in try-except for fault tolerance
+        try:
+            # 5.3.2a Skip jitter for Bankrate (own property) and when disabled
+            # Jitter only applies to competitor domains in automated runs
+            is_bankrate = any(bd in domain for bd in BANKRATE_DOMAINS)
+            jitter_enabled = stealth_config.get("enabled", False) and not is_bankrate
+            
+            if jitter_enabled:
+                jitter_seconds = calculate_startup_jitter(domain, stealth_config)
+                if jitter_seconds > 0:
+                    logger.info(f"Startup jitter: {jitter_seconds}s for {domain}")
+                    time.sleep(jitter_seconds)
 
-        logger.info(f"Processing domain: {domain}, sitemap URL: {sitemap_url}")
+            logger.info(f"Processing domain: {domain}, sitemap URL: {sitemap_url}")
 
-        # 5.3.3 Create fetcher with appropriate user agent
-        user_agent = get_user_agent(config, domain)
-        fetcher_config = {**config, "user_agent": user_agent}
-        sitemap_fetcher = SitemapFetcher(config=fetcher_config)
-        sitemap_parser = SitemapParser()
+            # 5.3.3 Create fetcher with appropriate user agent
+            user_agent = get_user_agent(config, domain)
+            fetcher_config = {**config, "user_agent": user_agent}
+            sitemap_fetcher = SitemapFetcher(config=fetcher_config)
+            sitemap_parser = SitemapParser()
 
-        # 5.3.4 Collect sitemap file metadata
-        processed_sitemap_urls_for_domain = set()
-        sitemap_file_records: List[Dict[str, Any]] = []
+            # 5.3.4 Collect sitemap file metadata
+            processed_sitemap_urls_for_domain = set()
+            sitemap_file_records: List[Dict[str, Any]] = []
 
-        # 5.3.5 Recursively fetch all page URLs
-        all_page_url_dicts = process_single_sitemap_url(
-            sitemap_url=sitemap_url,
-            fetcher=sitemap_fetcher,
-            parser=sitemap_parser,
-            processed_sitemap_urls=processed_sitemap_urls_for_domain,
-            domain=domain,
-            sitemap_file_records=sitemap_file_records,
-        )
+            # 5.3.5 Recursively fetch all page URLs
+            all_page_url_dicts = process_single_sitemap_url(
+                sitemap_url=sitemap_url,
+                fetcher=sitemap_fetcher,
+                parser=sitemap_parser,
+                processed_sitemap_urls=processed_sitemap_urls_for_domain,
+                domain=domain,
+                sitemap_file_records=sitemap_file_records,
+            )
 
-        if not all_page_url_dicts:
-            logger.warning(f"No page URLs found for {domain} from {sitemap_url}. Skipping.")
+            if not all_page_url_dicts:
+                logger.warning(f"No page URLs found for {domain} from {sitemap_url}. Skipping.")
+                domain_results[domain] = {"status": "warning", "message": "No URLs found"}
+                continue
+
+            logger.info(f"Gathered {len(all_page_url_dicts)} page URLs for {domain}")
+            logger.info(f"Processed {len(sitemap_file_records)} sitemap files for {domain}")
+
+            # 5.3.6 Save sitemap file metadata
+            if sitemap_file_records:
+                data_processor.save_sitemap_metadata(domain, sitemap_file_records)
+
+            # 5.3.7 Log sample for diagnostics
+            if all_page_url_dicts:
+                sample = all_page_url_dicts[0]
+                logger.debug(f"Sample URL: {sample.get('loc')}, section: {sample.get('section')}")
+
+            # 5.3.8 Process URLs and track changes
+            urls_df = data_processor.process_sitemap_urls(domain, all_page_url_dicts)
+
+            logger.info(f"Completed processing for domain: {domain}")
+            domain_results[domain] = {"status": "success", "urls": len(all_page_url_dicts)}
+            
+        except Exception as e:
+            # 5.3.9 Log error but continue to next domain
+            logger.error(f"FAILED processing domain {domain}: {type(e).__name__}: {e}")
+            logger.exception("Full traceback:")
+            domain_results[domain] = {"status": "error", "message": str(e)}
+            # Continue to next domain instead of crashing
             continue
-
-        logger.info(f"Gathered {len(all_page_url_dicts)} page URLs for {domain}")
-        logger.info(f"Processed {len(sitemap_file_records)} sitemap files for {domain}")
-
-        # 5.3.6 Save sitemap file metadata
-        if sitemap_file_records:
-            data_processor.save_sitemap_metadata(domain, sitemap_file_records)
-
-        # 5.3.7 Log sample for diagnostics
-        if all_page_url_dicts:
-            sample = all_page_url_dicts[0]
-            logger.debug(f"Sample URL: {sample.get('loc')}, section: {sample.get('section')}")
-
-        # 5.3.8 Process URLs and track changes
-        urls_df = data_processor.process_sitemap_urls(domain, all_page_url_dicts)
-
-        logger.info(f"Completed processing for domain: {domain}")
+        
         logger.info("-" * 40)
+    
+    # 5.4 Summary of domain results
+    logger.info("=" * 60)
+    logger.info("Domain Processing Summary:")
+    for domain, result in domain_results.items():
+        status = result.get("status", "unknown")
+        if status == "success":
+            logger.info(f"  ✓ {domain}: {result.get('urls', 0)} URLs processed")
+        elif status == "warning":
+            logger.warning(f"  ⚠ {domain}: {result.get('message', 'warning')}")
+        else:
+            logger.error(f"  ✗ {domain}: {result.get('message', 'failed')}")
 
     logger.info("=" * 60)
     logger.info("Sitemap processing pipeline completed")

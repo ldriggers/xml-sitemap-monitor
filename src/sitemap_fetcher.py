@@ -8,6 +8,7 @@ Key features:
 - Configurable timeout and user agent
 - Session reuse for connection pooling
 - Simple download delay for politeness (not stealth - sitemaps are public)
+- StealthFetcher fallback for 403 Forbidden responses
 """
 
 import requests
@@ -16,6 +17,13 @@ from urllib3.util.retry import Retry
 import logging
 import time
 from typing import Optional, Dict, Any
+
+# Try to import StealthFetcher from shared library
+try:
+    from seo_intel.stealth import StealthFetcher, ProbeResult
+    STEALTH_AVAILABLE = True
+except ImportError:
+    STEALTH_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +44,7 @@ class SitemapFetcher:
                 - timeout: Request timeout in seconds (default: 30)
                 - max_retries: Number of retry attempts (default: 3)
                 - download_delay: Delay between requests in seconds (default: 1.5)
+                - stealth_fallback: Enable StealthFetcher on 403 (default: True)
         """
         # 2.1.1 Extract config values with defaults
         config = config or {}
@@ -48,6 +57,7 @@ class SitemapFetcher:
         self.timeout = config.get("timeout", 30)
         self.max_retries = config.get("max_retries", 3)
         self.download_delay = float(config.get("download_delay", 1.5))
+        self.stealth_fallback = config.get("stealth_fallback", True) and STEALTH_AVAILABLE
         
         # 2.1.2 Track requests for delay logic
         self.request_count = 0
@@ -56,11 +66,22 @@ class SitemapFetcher:
         # 2.1.3 Create session with retry strategy
         self.session = self._create_session_with_retries()
         
+        # 2.1.4 Initialize StealthFetcher if available
+        self.stealth_fetcher = None
+        if self.stealth_fallback:
+            try:
+                self.stealth_fetcher = StealthFetcher()
+                logger.info("StealthFetcher initialized for 403 fallback")
+            except Exception as e:
+                logger.warning(f"Could not initialize StealthFetcher: {e}")
+                self.stealth_fallback = False
+        
         logger.info(
             f"SitemapFetcher initialized: "
             f"User-Agent={self.user_agent[:50]}..., "
             f"timeout={self.timeout}s, "
-            f"delay={self.download_delay}s"
+            f"delay={self.download_delay}s, "
+            f"stealth_fallback={self.stealth_fallback}"
         )
 
     def _create_session_with_retries(self) -> requests.Session:
@@ -153,6 +174,14 @@ class SitemapFetcher:
                     f"(status={response.status_code}, size={content_length:,} bytes)"
                 )
                 return response.text
+            
+            # 2.4.5 Try StealthFetcher fallback on 403
+            elif response.status_code == 403 and self.stealth_fallback and self.stealth_fetcher:
+                logger.warning(
+                    f"Got 403 for {sitemap_url}, trying StealthFetcher fallback..."
+                )
+                return self._stealth_fallback(sitemap_url)
+            
             else:
                 logger.error(
                     f"Failed to fetch {sitemap_url}: "
@@ -174,6 +203,40 @@ class SitemapFetcher:
             
         except Exception as e:
             logger.error(f"Unexpected error fetching {sitemap_url}: {e}")
+            return None
+
+    def _stealth_fallback(self, url: str) -> Optional[str]:
+        """
+        2.5 Try to fetch URL using StealthFetcher when normal request gets 403.
+        
+        Args:
+            url: URL that returned 403
+            
+        Returns:
+            Content string if stealth fetch succeeds, None otherwise
+        """
+        if not self.stealth_fetcher:
+            return None
+        
+        try:
+            result: ProbeResult = self.stealth_fetcher.fetch(url)
+            
+            if result.success and result.content:
+                logger.info(
+                    f"StealthFetcher succeeded for {url} "
+                    f"(strategy={result.strategy}, size={len(result.content):,} bytes)"
+                )
+                return result.content
+            else:
+                logger.warning(
+                    f"StealthFetcher failed for {url}: "
+                    f"status={result.status_code}, error={result.error}, "
+                    f"tried={result.strategies_tried}"
+                )
+                return None
+                
+        except Exception as e:
+            logger.error(f"StealthFetcher error for {url}: {e}")
             return None
 
 

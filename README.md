@@ -1,90 +1,150 @@
-# Competitor Sitemap Monitor
+# XML Sitemap Monitor
 
-This project is a lightweight business intelligence system designed to track changes to competitors' websites by monitoring their XML sitemaps. It automatically fetches sitemap data, identifies new, updated, and removed URLs, and maintains a historical record of these changes.
+A lightweight business intelligence system that tracks content changes across competitor websites by monitoring their XML sitemaps. Runs daily via GitHub Actions with zero infrastructure cost.
 
-## Overview
+## Features
 
-The system focuses on:
-- Monitoring XML sitemaps from configured competitor domains.
-- Detecting new, updated (based on `lastmod` dates), and removed URLs.
-- Storing URL metadata and change history in Parquet files.
-- Running daily via GitHub Actions for automated, cost-effective monitoring.
+- **Sitemap Monitoring**: Fetches and parses XML sitemaps (index + urlset formats)
+- **Change Detection**: Identifies discovered, modified, and removed URLs
+- **URL Status Checking**: HEAD/GET requests to verify page availability and SEO signals
+- **Concurrent Processing**: Parallel domain processing with configurable workers
+- **Historical Tracking**: Monthly CSV partitions with `first_seen_at`/`last_seen_at`
+- **Stealth Fetching**: Browser fingerprinting and referrer spoofing for blocking sites
+- **Fault Tolerant**: Per-domain error handling, push retry with artifacts backup
 
-This initial version does **not** store the actual content of the web pages, only sitemap metadata.
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     GitHub Actions (Daily)                       │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Sitemap Fetch    →    2. Status Check    →    3. Commit     │
+│     (main.py)              (url_status_checker.py)   (git push)  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Data Storage (CSV)                          │
+├─────────────────────────────────────────────────────────────────┤
+│  data/                                                           │
+│  ├── bankrate.com/                                               │
+│  │   ├── bankrate.com_urls.csv           (current state)        │
+│  │   ├── bankrate.com_changes_2025-12.csv (monthly changes)     │
+│  │   └── bankrate.com_status_history_*.csv                      │
+│  ├── nerdwallet.com/                                             │
+│  ├── investopedia.com/                                           │
+│  └── rocketmortgage.com/                                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Quick Start
+
+```bash
+# Clone
+git clone https://github.com/ldriggers/xml-sitemap-monitor.git
+cd xml-sitemap-monitor
+
+# Install
+pip install -r requirements.txt
+
+# Run sitemap monitor
+python -m src.main
+
+# Run status checker
+python -m src.url_status_checker
+
+# Run tests
+python -m pytest tests/ -v
+```
+
+## Configuration
+
+Edit `config.json`:
+
+```json
+{
+  "targets": [
+    {
+      "domain": "bankrate.com",
+      "sitemap_url": "https://www.bankrate.com/sitemap/sitemap-index.xml",
+      "download_delay": 1.5,
+      "fetch_timeout": 30,
+      "status_check": {
+        "enabled": true,
+        "check_new": true,
+        "check_updated": true,
+        "check_removed": true,
+        "max_per_run": 100
+      }
+    }
+  ],
+  "max_concurrent_domains": 4,
+  "user_agent": "Mozilla/5.0 (compatible; GPTBot/1.1)"
+}
+```
+
+## Data Schema
+
+### Changes CSV (12 columns)
+| Column | Description |
+|--------|-------------|
+| `detected_at` | UTC timestamp of detection |
+| `domain` | Target domain |
+| `loc` | URL |
+| `change_type` | discovered / modified / removed |
+| `first_seen_at` | First detection timestamp |
+| `last_seen_at` | Most recent detection |
+| `lastmod` | Sitemap lastmod value |
+| `lastmod_prev` | Previous lastmod (for modified) |
+| `sitemap_source_url` | Source sitemap URL |
+| `section` | URL path section |
+| `subsection` | URL path subsection |
+| `path_depth` | URL path depth |
+
+## GitHub Actions
+
+### Workflows
+- **Daily Sitemap Check** (`daily_monitor.yml`): Runs at midnight PT with 0-5hr jitter
+- **URL Status Check** (`status_checker.yml`): Triggers after sitemap check completes
+
+### Resilience Features
+- Push retry with pull-rebase (3 attempts)
+- Artifact backup before push (7-day retention)
+- Per-domain fault tolerance
+
+## Testing
+
+```bash
+# Fast smoke tests (29 tests, ~2s)
+python tests/test_smoke.py
+
+# Full suite including live tests (33 tests, ~5s)
+python -m pytest tests/ -v
+```
 
 ## Project Structure
 
 ```
-/
-├── .github/
-│   └── workflows/
-│       └── daily_monitor.yml  # GitHub Actions workflow
-├── competitive_content_monitoring/
-│   ├── src/                     # Source code
-│   │   ├── __init__.py
-│   │   ├── config.py            # Handles loading and validating config.json
-│   │   ├── sitemap_fetcher.py   # Fetches sitemaps
-│   │   ├── sitemap_parser.py    # Parses sitemap XML
-│   │   ├── data_processor.py    # Processes changes and updates data for each domain
-│   │   └── main.py              # Main script orchestrating the tasks
-│   ├── data/                    # Stores data files (created by the script)
-│   │   └── .gitkeep
-│   ├── requirements.txt         # Python dependencies
-│   ├── config.json              # Configuration for domains to monitor
-│   ├── PLAN.md                  # Project plan document
-│   └── prd.md                   # Product requirements document
-└── README.md                  # This file
+├── .github/workflows/
+│   ├── daily_monitor.yml
+│   └── status_checker.yml
+├── src/
+│   ├── main.py              # Sitemap fetching orchestrator
+│   ├── sitemap_fetcher.py   # HTTP fetching with retry
+│   ├── sitemap_parser.py    # XML parsing
+│   ├── data_processor.py    # Change detection & storage
+│   └── url_status_checker.py # HEAD/GET status checking
+├── tests/
+│   ├── test_smoke.py        # Fast deterministic tests
+│   └── test_live.py         # Network-dependent tests
+├── data/                    # CSV data files (gitignored for large files)
+├── config.json
+├── requirements.txt
+└── README.md
 ```
 
-## Setup
+## Links
 
-1.  **Clone the repository.**
-2.  **Configure Domains**: Edit `competitive_content_monitoring/config.json` to specify the domains you want to monitor. Update the `user_agent` field to something relevant to your project (including a contact URL or email is good practice).
-    ```json
-    {
-      "domains": [
-        {
-          "name": "Example Competitor 1",
-          "domain": "example.com",
-          "sitemap_url": "https://www.example.com/sitemap.xml"
-        },
-        {
-          "name": "Example Competitor 2",
-          "domain": "another-example.net",
-          "sitemap_url": "https://www.another-example.net/sitemap_index.xml"
-        }
-      ],
-      "user_agent": "YourProjectSitemapMonitor/1.0 (+http://your-contact-page-or-email)"
-    }
-    ```
-3.  **Install Dependencies**: 
-    ```bash
-    pip install -r competitive_content_monitoring/requirements.txt
-    ```
-
-## Usage
-
--   **Manual Run (for testing)**: Navigate to the `competitive_content_monitoring` project root directory and run the main script:
-    ```bash
-    python src/main.py
-    ```
-    (Ensure your current working directory is the project root, `competitive_content_monitoring`, not the `src` directory, for `config.json` to be found correctly by default).
--   **Automated Runs**: The system is configured to run daily via GitHub Actions. Changes to the `data/` directory (containing Parquet, CSV, and JSON files) will be committed back to the repository by the action.
-
-## Data Output
-
-The script processes each domain specified in `config.json` and generates/updates data files in the `competitive_content_monitoring/data/` directory. For each domain (e.g., `example.com`), the following files are created:
-
--   `example.com_urls.parquet`: Contains all unique URLs found for `example.com`, with their metadata (like `loc`, `lastmod`), detection timestamps, and a `change_type` column indicating if the URL is 'new', 'updated', 'removed', or 'unchanged' in the latest run. This is the primary data file for analysis.
--   `example.com_urls.csv`: A CSV version of the Parquet file for easier ad-hoc viewing or use in tools that prefer CSV.
--   `example.com_urls.json`: A JSON Lines version of the data, where each line is a JSON object representing a URL entry.
-
-These files store the history and current state of all discovered page URLs from the sitemaps. The `DataProcessor` module handles loading previous data, comparing it with the latest fetch, and identifying changes.
-
-## Contributing
-
-(Details to be added if the project becomes open to contributions)
-
-## License
-
-(To be determined - e.g., MIT, Apache 2.0, or private) 
+- **GitHub**: https://github.com/ldriggers/xml-sitemap-monitor
+- **Actions**: https://github.com/ldriggers/xml-sitemap-monitor/actions
+- **Shared Library**: `10.07-seo-intel-common` (stealth fetching)

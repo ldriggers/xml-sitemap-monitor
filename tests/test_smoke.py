@@ -231,6 +231,103 @@ def test_wiring():
         log("User agent logic", False, str(e))
 
 # =============================================================================
+# 7. CONCURRENCY (3 tests)
+# =============================================================================
+
+def test_concurrency():
+    print("\n⚡ CONCURRENCY")
+    
+    # 7.1 Main.py has ThreadPoolExecutor
+    try:
+        main_path = PROJECT_ROOT / "src" / "main.py"
+        content = main_path.read_text()
+        has_threadpool = "ThreadPoolExecutor" in content
+        has_process_domain = "def process_domain(" in content
+        log("main.py concurrent", has_threadpool and has_process_domain, 
+            "ThreadPoolExecutor + process_domain")
+    except Exception as e:
+        log("main.py concurrent", False, str(e))
+    
+    # 7.2 url_status_checker.py has ThreadPoolExecutor
+    try:
+        checker_path = PROJECT_ROOT / "src" / "url_status_checker.py"
+        content = checker_path.read_text()
+        has_threadpool = "ThreadPoolExecutor" in content
+        has_process_func = "def process_domain_status(" in content
+        log("status_checker concurrent", has_threadpool and has_process_func,
+            "ThreadPoolExecutor + process_domain_status")
+    except Exception as e:
+        log("status_checker concurrent", False, str(e))
+    
+    # 7.3 Config has max_concurrent_domains
+    try:
+        config_path = PROJECT_ROOT / "config.json"
+        with open(config_path) as f:
+            config = json.load(f)
+        has_setting = "max_concurrent_domains" in config
+        log("Config concurrent setting", has_setting, 
+            f"max_concurrent_domains={config.get('max_concurrent_domains', 'missing')}")
+    except Exception as e:
+        log("Config concurrent setting", False, str(e))
+
+# =============================================================================
+# 8. WORKFLOW RESILIENCE (3 tests)
+# =============================================================================
+
+def test_workflows():
+    print("\n🔄 WORKFLOWS")
+    
+    workflows_dir = PROJECT_ROOT / ".github" / "workflows"
+    
+    for wf_name in ["daily_monitor.yml", "status_checker.yml"]:
+        wf_path = workflows_dir / wf_name
+        if not wf_path.exists():
+            log(f"{wf_name}", False, "File not found")
+            continue
+        
+        content = wf_path.read_text()
+        
+        # Check retry logic
+        has_retry = "MAX_RETRIES=3" in content
+        has_artifact = "upload-artifact@v4" in content
+        has_rebase = "pull --rebase" in content
+        
+        all_ok = has_retry and has_artifact and has_rebase
+        detail = f"retry={has_retry}, artifact={has_artifact}, rebase={has_rebase}"
+        log(f"{wf_name} resilience", all_ok, detail)
+
+# =============================================================================
+# 9. SCHEMA CONSISTENCY (2 tests)
+# =============================================================================
+
+def test_schema_consistency():
+    print("\n📊 SCHEMA CONSISTENCY")
+    
+    data_dir = PROJECT_ROOT / "data"
+    expected_cols = 12
+    
+    for domain in ["bankrate.com", "nerdwallet.com"]:
+        domain_dir = data_dir / domain
+        if not domain_dir.exists():
+            log(f"{domain} schema", True, "No data yet")
+            continue
+        
+        change_files = list(domain_dir.glob(f"*_changes_*.csv"))
+        if not change_files:
+            log(f"{domain} schema", True, "No change files yet")
+            continue
+        
+        all_correct = True
+        for f in change_files:
+            df = pd.read_csv(f, nrows=0)
+            if len(df.columns) != expected_cols:
+                all_correct = False
+                break
+        
+        log(f"{domain} schema", all_correct, 
+            f"{len(change_files)} files, all {expected_cols} cols" if all_correct else "Schema mismatch")
+
+# =============================================================================
 # RUNNER
 # =============================================================================
 
@@ -246,6 +343,9 @@ def run_all():
     test_change_detection()
     test_data_schema()
     test_wiring()
+    test_concurrency()
+    test_workflows()
+    test_schema_consistency()
     
     passed = sum(1 for r in RESULTS if r["passed"])
     total = len(RESULTS)

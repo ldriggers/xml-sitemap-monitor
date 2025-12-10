@@ -30,10 +30,18 @@ import random
 import time
 import pandas as pd
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlparse
 from glob import glob
+
+# Try to import StealthFetcher from shared library
+try:
+    from seo_intel.stealth import StealthFetcher, ProbeResult
+    STEALTH_AVAILABLE = True
+except ImportError:
+    STEALTH_AVAILABLE = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -257,6 +265,70 @@ class CircuitBreaker:
         )
 
 
+def _stealth_head_fallback(url: str) -> Optional[Dict]:
+    """
+    2.9 Try to check URL using StealthFetcher when normal HEAD gets 403.
+    
+    Uses StealthFetcher's browser fingerprinting to bypass blocking.
+    Returns a result dict compatible with check_url_head output.
+    """
+    if not STEALTH_AVAILABLE:
+        return None
+    
+    try:
+        fetcher = StealthFetcher()
+        probe_result: ProbeResult = fetcher.fetch(url)
+        
+        if probe_result.success:
+            result = {
+                'url': url,
+                'status_code': probe_result.status_code,
+                'final_url': None,
+                'is_redirect': False,
+                'redirect_count': 0,
+                'response_time_ms': None,
+                'error': None,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'user_agent_used': f'stealth:{probe_result.strategy}',
+                'h_etag': None,
+                'h_last_modified': None,
+                'h_content_length': None,
+                'h_content_type': None,
+                'h_cache_control': None,
+                'h_age': None,
+                'h_vary': None,
+                'h_x_robots_tag': None,
+                'h_link': None,
+                'h_x_cache': None,
+                'h_cf_cache_status': None,
+                'headers_json': json.dumps(probe_result.headers) if probe_result.headers else None,
+                'inferred_crawlable': True,
+                'inferred_indexable_from_head': True,  # Assume true if we got through
+                'h_canonical_url': None,
+            }
+            
+            # Extract headers if available
+            if probe_result.headers:
+                h = probe_result.headers
+                result['h_etag'] = h.get('ETag') or h.get('etag')
+                result['h_last_modified'] = h.get('Last-Modified') or h.get('last-modified')
+                result['h_content_length'] = h.get('Content-Length') or h.get('content-length')
+                result['h_content_type'] = h.get('Content-Type') or h.get('content-type')
+                result['h_x_robots_tag'] = h.get('X-Robots-Tag') or h.get('x-robots-tag')
+            
+            return result
+        else:
+            logger.warning(
+                f"Stealth fallback failed for {url}: "
+                f"status={probe_result.status_code}, error={probe_result.error}"
+            )
+            return None
+            
+    except Exception as e:
+        logger.error(f"Stealth fallback error for {url}: {e}")
+        return None
+
+
 def check_url_head(
     url: str,
     user_agent: Optional[str] = None,
@@ -346,6 +418,13 @@ def check_url_head(
         result['is_redirect'] = response.url != url
         result['redirect_count'] = len(response.history)
         result['response_time_ms'] = round(elapsed)
+        
+        # 3.3.1 Try stealth fallback on 403 Forbidden
+        if response.status_code == 403 and STEALTH_AVAILABLE:
+            stealth_result = _stealth_head_fallback(url)
+            if stealth_result and stealth_result.get('status_code') == 200:
+                logger.info(f"Stealth fallback succeeded for {url}")
+                return stealth_result
         
         # 3.4 Extract key headers (flattened)
         resp_headers = response.headers
@@ -964,9 +1043,65 @@ def print_summary(df: pd.DataFrame, domain: str):
     print(f"{'='*50}\n")
 
 
+def process_domain_status(
+    domain: str,
+    config: Dict[str, Any],
+    data_dir: str,
+    force: bool,
+    limit: Optional[int] = None
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    9.0 Process status checks for a single domain (designed for concurrent execution).
+    
+    Args:
+        domain: Domain to check
+        config: Global configuration dict
+        data_dir: Data directory path
+        force: Force run even if disabled
+        limit: Override max URLs per domain
+        
+    Returns:
+        Tuple of (domain, result_dict) for aggregation
+    """
+    try:
+        logger.info(f"\n--- Checking {domain} ---")
+        
+        # Override limit if specified
+        if limit:
+            domain_config = get_domain_status_config(config, domain)
+            domain_config["max_per_run"] = limit
+            # Note: We don't modify shared config here to avoid race conditions
+        
+        results_df = check_urls_for_domain(
+            domain=domain,
+            config=config,
+            data_dir=data_dir,
+            force=force
+        )
+        
+        if results_df is not None and not results_df.empty:
+            # Save history
+            save_daily_history(results_df, domain, data_dir)
+            
+            # Generate redirect map
+            generate_redirect_map(results_df, domain, data_dir)
+            
+            # Print summary
+            print_summary(results_df, domain)
+            
+            return (domain, {"status": "success", "urls_checked": len(results_df)})
+        else:
+            return (domain, {"status": "skipped", "message": "No URLs to check or disabled"})
+            
+    except Exception as e:
+        logger.error(f"FAILED processing status checks for {domain}: {type(e).__name__}: {e}")
+        logger.exception("Full traceback:")
+        return (domain, {"status": "error", "message": str(e)})
+
+
 def main():
     """
-    9.0 CLI entry point.
+    9.1 CLI entry point with concurrent domain processing.
     """
     parser = argparse.ArgumentParser(
         description="Check HTTP status of URLs from sitemap changes"
@@ -1012,37 +1147,40 @@ def main():
         logger.error("No domains configured")
         return
     
-    for domain in domains:
-        logger.info(f"\n--- Checking {domain} ---")
-        
-        # Override limit if specified
-        if args.limit:
-            domain_config = get_domain_status_config(config, domain)
-            domain_config["max_per_run"] = args.limit
-            # Temporarily update config
-            for t in config.get("targets", []):
-                if t.get("domain") == domain:
-                    t["status_check"] = domain_config
-        
-        results_df = check_urls_for_domain(
-            domain=domain,
-            config=config,
-            data_dir=args.data_dir,
-            force=args.force
-        )
-        
-        if results_df is not None and not results_df.empty:
-            # Save history
-            save_daily_history(results_df, domain, args.data_dir)
-            
-            # Generate redirect map
-            generate_redirect_map(results_df, domain, args.data_dir)
-            
-            # Print summary
-            print_summary(results_df, domain)
+    # Get concurrency setting (default 4, or 1 if single domain specified)
+    max_concurrent = 1 if args.domain else config.get("max_concurrent_domains", 4)
+    logger.info(f"Processing {len(domains)} domains with {max_concurrent} concurrent workers")
     
+    # Process domains concurrently
+    domain_results = {}
+    
+    with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+        futures = {
+            executor.submit(
+                process_domain_status,
+                domain,
+                config,
+                args.data_dir,
+                args.force,
+                args.limit
+            ): domain
+            for domain in domains
+        }
+        
+        for future in as_completed(futures):
+            domain = futures[future]
+            try:
+                domain_name, result = future.result()
+                domain_results[domain_name] = result
+                logger.info(f"Completed {domain_name}: {result.get('status')}")
+            except Exception as e:
+                logger.error(f"Error retrieving result for {domain}: {e}")
+                domain_results[domain] = {"status": "error", "message": str(e)}
+    
+    # Summary
     logger.info("=" * 60)
     logger.info("URL Status Checker complete")
+    logger.info(f"Results: {domain_results}")
     logger.info("=" * 60)
 
 

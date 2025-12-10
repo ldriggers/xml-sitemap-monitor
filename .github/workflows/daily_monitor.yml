@@ -44,7 +44,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sitemap-data-${{ github.run_id }}
-          path: data/
+          path: output/
           retention-days: 7
           if-no-files-found: ignore
       
@@ -52,7 +52,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/
+          git add output/
           if ! git diff --staged --quiet; then
             git commit -m "Update sitemap data [skip ci]"
             

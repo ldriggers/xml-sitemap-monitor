@@ -44,14 +44,22 @@ def validate_config(config: Dict[str, Any]) -> bool:
         if not isinstance(target_entry, dict):
             logger.error(f"Target entry at index {i} is not a dictionary.")
             return False
-        required_keys = ["domain", "sitemap_url"]
-        for key in required_keys:
-            if key not in target_entry:
-                logger.error(f"Target entry at index {i} is missing required key: '{key}'.")
-                return False
-            if not isinstance(target_entry[key], str) or not target_entry[key].strip():
-                logger.error(f"Value for key '{key}' in target entry at index {i} must be a non-empty string.")
-                return False
+        
+        # Check domain is present
+        if "domain" not in target_entry:
+            logger.error(f"Target entry at index {i} is missing required key: 'domain'.")
+            return False
+        if not isinstance(target_entry["domain"], str) or not target_entry["domain"].strip():
+            logger.error(f"Value for 'domain' in target entry at index {i} must be a non-empty string.")
+            return False
+        
+        # Check sitemap_url OR sitemap_urls is present
+        has_sitemap_url = "sitemap_url" in target_entry and isinstance(target_entry["sitemap_url"], str) and target_entry["sitemap_url"].strip()
+        has_sitemap_urls = "sitemap_urls" in target_entry and isinstance(target_entry["sitemap_urls"], list) and len(target_entry["sitemap_urls"]) > 0
+        
+        if not has_sitemap_url and not has_sitemap_urls:
+            logger.error(f"Target entry at index {i} is missing 'sitemap_url' or 'sitemap_urls'.")
+            return False
 
     if "user_agent" not in config or not isinstance(config["user_agent"], str) or not config["user_agent"].strip():
         logger.warning("'user_agent' key is missing or not a non-empty string. Using a default one is recommended.")

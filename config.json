@@ -48,7 +48,10 @@
     },
     {
       "domain": "rocketmortgage.com",
-      "sitemap_url": "https://www.rocketmortgage.com/sitemap.xml",
+      "sitemap_urls": [
+        "https://www.rocketmortgage.com/sitemap.xml",
+        "https://www.rocketmortgage.com/learn/sitemap.xml"
+      ],
       "download_delay": 5.0,
       "status_check": {
         "enabled": true,

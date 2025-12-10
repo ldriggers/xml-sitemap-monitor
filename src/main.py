@@ -334,7 +334,13 @@ def process_domain(
         Tuple of (domain, result_dict) for aggregation
     """
     domain = target.get("domain")
+    # Support both single sitemap_url and array of sitemap_urls
     sitemap_url = target.get("sitemap_url")
+    sitemap_urls = target.get("sitemap_urls", [])
+    
+    # Normalize to list
+    if sitemap_url and not sitemap_urls:
+        sitemap_urls = [sitemap_url]
     
     try:
         # 4.5.1 Skip jitter for Bankrate (own property) and when disabled
@@ -347,7 +353,7 @@ def process_domain(
                 logger.info(f"Startup jitter: {jitter_seconds}s for {domain}")
                 time.sleep(jitter_seconds)
 
-        logger.info(f"Processing domain: {domain}, sitemap URL: {sitemap_url}")
+        logger.info(f"Processing domain: {domain}, sitemaps: {len(sitemap_urls)}")
 
         # 4.5.2 Create fetcher with appropriate user agent and target-specific settings
         user_agent = get_user_agent(config, domain)
@@ -364,18 +370,22 @@ def process_domain(
         processed_sitemap_urls_for_domain = set()
         sitemap_file_records: List[Dict[str, Any]] = []
 
-        # 4.5.4 Recursively fetch all page URLs
-        all_page_url_dicts = process_single_sitemap_url(
-            sitemap_url=sitemap_url,
-            fetcher=sitemap_fetcher,
-            parser=sitemap_parser,
-            processed_sitemap_urls=processed_sitemap_urls_for_domain,
-            domain=domain,
-            sitemap_file_records=sitemap_file_records,
-        )
+        # 4.5.4 Recursively fetch all page URLs from all sitemaps
+        all_page_url_dicts = []
+        for sm_url in sitemap_urls:
+            logger.info(f"Fetching sitemap: {sm_url}")
+            urls_from_sitemap = process_single_sitemap_url(
+                sitemap_url=sm_url,
+                fetcher=sitemap_fetcher,
+                parser=sitemap_parser,
+                processed_sitemap_urls=processed_sitemap_urls_for_domain,
+                domain=domain,
+                sitemap_file_records=sitemap_file_records,
+            )
+            all_page_url_dicts.extend(urls_from_sitemap)
 
         if not all_page_url_dicts:
-            logger.warning(f"No page URLs found for {domain} from {sitemap_url}. Skipping.")
+            logger.warning(f"No page URLs found for {domain}. Skipping.")
             return (domain, {"status": "warning", "message": "No URLs found"})
 
         logger.info(f"Gathered {len(all_page_url_dicts)} page URLs for {domain}")
@@ -440,10 +450,13 @@ def main():
     targets_to_process = []
     for target in config.get("targets", []):
         domain = target.get("domain")
+        # Support both single sitemap_url and array of sitemap_urls
         sitemap_url = target.get("sitemap_url")
-
-        if not domain or not sitemap_url:
-            logger.warning(f"Skipping target with missing domain or sitemap_url: {target}")
+        sitemap_urls = target.get("sitemap_urls", [])
+        
+        has_sitemaps = sitemap_url or sitemap_urls
+        if not domain or not has_sitemaps:
+            logger.warning(f"Skipping target with missing domain or sitemap_url(s): {target}")
             continue
 
         if not should_run_domain(target, config):

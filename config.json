@@ -18,46 +18,47 @@
     {
       "domain": "nerdwallet.com",
       "sitemap_url": "https://www.nerdwallet.com/blog/wp-sitemap.xml",
-      "download_delay": 2.0,
+      "download_delay": 3.0,
       "status_check": {
         "enabled": true,
-        "check_new": false,
-        "check_updated": false,
+        "check_new": true,
+        "check_updated": true,
         "check_removed": true,
-        "max_per_run": 25,
-        "failure_threshold": 0.3,
-        "backoff_days": 7,
-        "timeout": 3
+        "max_per_run": 50,
+        "failure_threshold": 0.5,
+        "backoff_days": 3,
+        "timeout": 10
       }
     },
     {
       "domain": "investopedia.com",
       "sitemap_url": "https://www.investopedia.com/sitemap.xml",
-      "download_delay": 2.0,
+      "download_delay": 3.0,
+      "fetch_timeout": 60,
       "status_check": {
         "enabled": true,
         "check_new": true,
         "check_updated": true,
         "check_removed": true,
-        "max_per_run": 100,
+        "max_per_run": 50,
         "failure_threshold": 0.5,
         "backoff_days": 3,
-        "timeout": 5
+        "timeout": 10
       }
     },
     {
       "domain": "rocketmortgage.com",
       "sitemap_url": "https://www.rocketmortgage.com/sitemap.xml",
-      "download_delay": 2.0,
+      "download_delay": 5.0,
       "status_check": {
         "enabled": true,
         "check_new": true,
         "check_updated": true,
         "check_removed": true,
-        "max_per_run": 100,
-        "failure_threshold": 0.5,
-        "backoff_days": 3,
-        "timeout": 5
+        "max_per_run": 25,
+        "failure_threshold": 0.7,
+        "backoff_days": 7,
+        "timeout": 10
       }
     }
   ],

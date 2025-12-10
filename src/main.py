@@ -350,9 +350,15 @@ def main():
 
             logger.info(f"Processing domain: {domain}, sitemap URL: {sitemap_url}")
 
-            # 5.3.3 Create fetcher with appropriate user agent
+            # 5.3.3 Create fetcher with appropriate user agent and target-specific settings
             user_agent = get_user_agent(config, domain)
-            fetcher_config = {**config, "user_agent": user_agent}
+            # Merge global config with target-specific overrides (timeout, download_delay, etc.)
+            fetcher_config = {
+                **config,
+                "user_agent": user_agent,
+                "timeout": target.get("fetch_timeout", target.get("timeout", config.get("timeout", 30))),
+                "download_delay": target.get("download_delay", config.get("download_delay", 1.5)),
+            }
             sitemap_fetcher = SitemapFetcher(config=fetcher_config)
             sitemap_parser = SitemapParser()
 

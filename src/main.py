@@ -496,11 +496,11 @@ def main():
     for domain, result in domain_results.items():
         status = result.get("status", "unknown")
         if status == "success":
-            logger.info(f"  ✓ {domain}: {result.get('urls', 0)} URLs processed")
+            logger.info(f"  [OK] {domain}: {result.get('urls', 0)} URLs processed")
         elif status == "warning":
-            logger.warning(f"  ⚠ {domain}: {result.get('message', 'warning')}")
+            logger.warning(f"  [WARN] {domain}: {result.get('message', 'warning')}")
         else:
-            logger.error(f"  ✗ {domain}: {result.get('message', 'failed')}")
+            logger.error(f"  [FAIL] {domain}: {result.get('message', 'failed')}")
 
     logger.info("=" * 60)
     logger.info("Sitemap processing pipeline completed")

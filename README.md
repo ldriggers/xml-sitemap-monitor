@@ -5,11 +5,13 @@ A lightweight business intelligence system that tracks content changes across co
 ## Features
 
 - **Sitemap Monitoring**: Fetches and parses XML sitemaps (index + urlset formats)
+- **Multi-Sitemap Support**: Configure multiple `sitemap_urls` per domain
 - **Change Detection**: Identifies discovered, modified, and removed URLs
 - **URL Status Checking**: HEAD/GET requests to verify page availability and SEO signals
 - **Concurrent Processing**: Parallel domain processing with configurable workers
 - **Historical Tracking**: Monthly CSV partitions with `first_seen_at`/`last_seen_at`
-- **Stealth Fetching**: Browser fingerprinting and referrer spoofing for blocking sites
+- **Stealth Fetching**: Browser fingerprinting and referrer spoofing for 403/402 fallback
+- **Robots.txt Compliance**: Filters bot user agents by robots.txt rules
 - **Fault Tolerant**: Per-domain error handling, push retry with artifacts backup
 
 ## Architecture
@@ -26,14 +28,14 @@ A lightweight business intelligence system that tracks content changes across co
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Data Storage (CSV)                          │
 ├─────────────────────────────────────────────────────────────────┤
-│  data/                                                           │
-│  ├── bankrate.com/                                               │
+│  output/                                                         │
+│  ├── bankrate.com/           (10,842 URLs)                      │
 │  │   ├── bankrate.com_urls.csv           (current state)        │
 │  │   ├── bankrate.com_changes_2025-12.csv (monthly changes)     │
 │  │   └── bankrate.com_status_history_*.csv                      │
-│  ├── nerdwallet.com/                                             │
-│  ├── investopedia.com/                                           │
-│  └── rocketmortgage.com/                                         │
+│  ├── nerdwallet.com/         (9,662 URLs)                       │
+│  ├── investopedia.com/       (51,508 URLs)                      │
+│  └── rocketmortgage.com/     (2,311 URLs)                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,12 +78,22 @@ Edit `config.json`:
         "check_removed": true,
         "max_per_run": 100
       }
+    },
+    {
+      "domain": "rocketmortgage.com",
+      "sitemap_urls": [
+        "https://www.rocketmortgage.com/sitemap.xml",
+        "https://www.rocketmortgage.com/learn/sitemap.xml"
+      ],
+      "download_delay": 5.0
     }
   ],
   "max_concurrent_domains": 4,
-  "user_agent": "Mozilla/5.0 (compatible; GPTBot/1.1)"
+  "data_directory": "output"
 }
 ```
+
+**Note**: Use `sitemap_url` (string) for single sitemaps, `sitemap_urls` (array) for multiple.
 
 ## Data Schema
 
@@ -126,18 +138,21 @@ python -m pytest tests/ -v
 
 ```
 ├── .github/workflows/
-│   ├── daily_monitor.yml
-│   └── status_checker.yml
+│   ├── daily_monitor.yml      # Midnight PT + 0-5hr jitter
+│   └── status_checker.yml     # Triggers after sitemap check
 ├── src/
-│   ├── main.py              # Sitemap fetching orchestrator
-│   ├── sitemap_fetcher.py   # HTTP fetching with retry
-│   ├── sitemap_parser.py    # XML parsing
-│   ├── data_processor.py    # Change detection & storage
-│   └── url_status_checker.py # HEAD/GET status checking
+│   ├── main.py                # Sitemap fetching orchestrator
+│   ├── sitemap_fetcher.py     # HTTP fetching with stealth fallback
+│   ├── sitemap_parser.py      # XML parsing (index + urlset)
+│   ├── data_processor.py      # Change detection & storage
+│   ├── url_status_checker.py  # HEAD/GET status checking
+│   ├── robots_checker.py      # Robots.txt parsing & UA filtering
+│   ├── stealth.py             # StealthFetcher for 403 bypass
+│   └── config.py              # Config loading & validation
 ├── tests/
-│   ├── test_smoke.py        # Fast deterministic tests
-│   └── test_live.py         # Network-dependent tests
-├── data/                    # CSV data files (gitignored for large files)
+│   ├── test_smoke.py          # 29 fast deterministic tests
+│   └── test_live.py           # 4 network-dependent tests
+├── output/                    # Per-domain CSV data
 ├── config.json
 ├── requirements.txt
 └── README.md

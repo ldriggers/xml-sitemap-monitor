@@ -7,7 +7,7 @@
     },
     "www.investopedia.com": {
       "content": "User-agent: *\n\nDisallow: *.pdf\nDisallow: /embed?\n\nUser-agent: Pinterest\nDisallow:\n\nUser-agent: Pinterestbot\nDisallow:\n\nUser-agent: CCBot\nDisallow: /\n\nUser-agent: ChatGPT-User\nDisallow: /thmb/\n\nUser-agent: OAI-SearchBot\nDisallow: /thmb/\n\nUser-agent: GPTBot\nDisallow: /thmb/\n\nUser-agent: news-please\nDisallow: /\n\nUser-agent: anthropic-ai\nDisallow: /\n\nUser-agent: ClaudeBot\nDisallow: /\n\nUser-agent: Claude-Web\nDisallow: /\n\nUser-agent: cohere-ai\nDisallow: /\n\nUser-agent: ImagesiftBot\nDisallow: /\n\nUser-agent: FriendlyCrawler\nDisallow: /\n\nUser-agent: Quora-Bot\nDisallow: /\n\nUser-agent: omgilibot\nDisallow: /\n\nUser-agent: omgili\nDisallow: /\n\nUser-agent: PerplexityBot\nDisallow: /\n\nUser-agent: Perplexity-User\nDisallow: /\n\n\nSitemap: https://www.investopedia.com/sitemap.xml\n\nSitemap: https://www.investopedia.com/google-news-sitemap.xml\n",
-      "fetched_at": "2025-12-10T22:30:31.608210+00:00",
+      "fetched_at": "2025-12-12T08:52:45.289261+00:00",
       "status_code": 200
     },
     "www.rocketmortgage.com": {
